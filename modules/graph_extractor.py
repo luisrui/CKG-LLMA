@@ -23,7 +23,7 @@ class Extractor():
             if len(self.kg[e]) > self.max_neighbors:
                 neighbors = random.sample(population=self.kg[e], k=self.max_neighbors)
             else:
-                neighbors = random.choices(population=self.kg[e], k=self.n_neighbor)
+                neighbors = random.choices(population=self.kg[e], k=self.max_neighbors)
             
             self.adj_ent[e] = torch.LongTensor([ent for _, ent in neighbors])
             self.adj_rel[e] = torch.LongTensor([rel for rel, _ in neighbors])
@@ -38,12 +38,10 @@ class Extractor():
 
         for h in range(self.n_iter):
             neighbor_entities = (
-                torch.LongTensor(self.adj_ent[entities[h]])
-                .view((self.batch_size, -1))
+                torch.LongTensor(self.adj_ent[entities[h]]).view((self.batch_size, -1))
             )
             neighbor_relations = (
-                torch.LongTensor(self.adj_rel[entities[h]])
-                .view((self.batch_size, -1))
+                torch.LongTensor(self.adj_rel[entities[h]]).view((self.batch_size, -1))
             )
             entities.append(neighbor_entities)
             relations.append(neighbor_relations)
