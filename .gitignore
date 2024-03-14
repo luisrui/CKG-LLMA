@@ -1,4 +1,8 @@
 **/dataset
-test.ipynb
+*.ipynb
 **/__pycache__
 **/references_code
+**/tutorials
+**/pretrained_models
+*.zip
+**/data

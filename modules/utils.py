@@ -11,7 +11,7 @@ def read_yaml(path):
 
     return dict
 
-def _set_random_seed(seed=2020):
+def set_random_seed(seed=2020):
     
     np.random.seed(seed)
     random.seed(seed)

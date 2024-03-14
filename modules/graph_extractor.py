@@ -3,6 +3,10 @@ from torch import nn as nn
 import random
 
 class Extractor():
+    '''
+    Extracting subgraphs based on one-hop neighbours. When the core node is user, there should be two subgraphs:(user->user, user->item); when the core node is item, 
+    there should be two subgraphs:(item->item, item->user). The total number of graphs of one pair of (user, item) should be 4.
+    '''
     def __init__(self, num_ent, kg, args):
         self.n_iter = args['n_iter']
         self.num_ent = num_ent

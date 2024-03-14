@@ -1,7 +1,10 @@
 cuda: 0
+seed: 42
 data:
-      name: 'AmazonBook'
+      name: 'AmazonBookSmall'
+negnum : 100
 epoch: 100
-batch_size: 32
+batch_size: 1
 n_iter: 2
 max_sample_neighbors : 8
+dataloader_n_workers : 4
