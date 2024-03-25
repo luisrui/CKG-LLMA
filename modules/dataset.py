@@ -8,6 +8,15 @@ import os
 import json
 from collections import (defaultdict, Iterable, OrderedDict)
 from tqdm import tqdm
+try:
+    from cppimport import imp_from_filepath
+    from os.path import join, dirname
+    path = join(dirname(__file__), "sources/sampling.cpp")
+    sampling = imp_from_filepath(path)
+    sample_ext = True
+except:
+    print("Cpp extension not loaded")
+    sample_ext = False
 
 config = {
     'AmazonBook' : {
@@ -109,9 +118,9 @@ class KGRecDataset(torch_geometric.data.Dataset):
             (self.num_user <= edge_index[1]) & (edge_index[1] < self.num_user + self.num_items)
         user_item[edge_index[0][liked_mask], edge_index[1][liked_mask] - self.num_user] = True
         self.u_of_i = {u: (np.flatnonzero(row) + self.num_user).tolist() for u, row in enumerate(user_item.numpy())}
-        item_user[edge_index[0][liked_mask], edge_index[1][liked_mask] - self.num_user] = True
+        item_user[edge_index[1][liked_mask] - self.num_user, edge_index[0][liked_mask]] = True
         self.i_of_u = {i + self.num_user: np.flatnonzero(row).tolist() for i, row in enumerate(item_user.numpy())}
-        
+
         ## Build self.u_of_u
         print('Building user-user relations...')
         user_user = torch.zeros((self.num_user, self.num_user), dtype=torch.bool)
@@ -157,48 +166,24 @@ class KGRecDataset(torch_geometric.data.Dataset):
     def _gen_adj(self):
         edge_index = self.struc_dataset.edge_index
         edge_type = self.struc_dataset.edge_type
-         ## Build self.u_of_i
-        print('Building user-item relations...')
+        
+        ## Build self.u_of_i and self.i_of_u
+        print('Building user-item and item-user relations...')
         user_item = torch.zeros((self.num_user, self.num_items), dtype=torch.bool)
+        item_user = torch.zeros((self.num_items, self.num_user), dtype=torch.bool)
         liked_mask = (edge_type == self.rel2id['liked']) & (edge_index[0] < self.num_user) & \
             (self.num_user <= edge_index[1]) & (edge_index[1] < self.num_user + self.num_items)
         user_item[edge_index[0][liked_mask], edge_index[1][liked_mask] - self.num_user] = True
         self.u_of_i = {u: (np.flatnonzero(row) + self.num_user).tolist() for u, row in enumerate(user_item.numpy())}
-        
-        ## Build self.u_of_u
-        print('Building user-user relations...')
-        user_user = torch.zeros((self.num_user, self.num_user), dtype=torch.bool)
-        coliked_mask = (edge_type == self.rel2id['co-liked']) & (edge_index[0] < self.num_user) & (edge_index[1] < self.num_user)
-        user_user[edge_index[0][coliked_mask], edge_index[1][coliked_mask]] = True
-        self.u_of_u = {u: np.flatnonzero(row).tolist() for u, row in enumerate(user_user.numpy())}
-        
-        # Build self.i_of_i
-        print('Building item-item relations...')
-        item_mask = (edge_index[0] >= self.num_user) & (edge_index[0] < self.num_user + self.num_items) & \
-            (edge_index[1] >= self.num_user) & (edge_index[1] < self.num_user + self.num_items)
-        #item_item = torch.full((self.num_items, self.num_items), -1, dtype=torch.int64)
-        item_hs, item_ts, ii_rels = edge_index[0][item_mask].numpy(), edge_index[1][item_mask].numpy(), edge_type[item_mask].numpy()
-        for i in tqdm(range(len(item_hs))):
-            h, t, r = item_hs[i], item_ts[i], ii_rels[i]
-            self.i_of_i[h].append((r, t))
-            self.i_of_i[t].append((r, h))
-        #self.i_of_i = {i : [(h, r, t) for h, r, t in zip(edge_index[0][item_mask], edge_type[item_mask], edge_index[1][item_mask]) if i == h or i == t] for i in range(self.num_user, self.num_user+self.num_items)}
-        
-        ## Build self.i_of_a
-        print('Building item-attribute relations...')
-        attr_mask = (edge_index[0] >= self.num_user) & (edge_index[0] < self.num_user+self.num_items) & (edge_index[1] >= self.num_user+self.num_items)
-        target_items, target_attrs, target_rels = edge_index[0][attr_mask].numpy(), edge_index[1][attr_mask].numpy(), edge_type[attr_mask].numpy()
-        for i in tqdm(range(len(target_items))):
-            h, t, r = target_items[i], target_attrs[i], target_rels[i]
-            self.i_of_a[h].append((r, t))
-        # self.i_of_a = {i: [(i, r, t) for i, r, t in zip(edge_index[0][attr_mask], edge_type[attr_mask], edge_index[1][attr_mask]) if i == i] for i in range(self.num_user, self.num_user+self.num_items)}
-            
+        item_user[edge_index[1][liked_mask] - self.num_user, edge_index[0][liked_mask]] = True
+        self.i_of_u = {i + self.num_user: np.flatnonzero(row).tolist() for i, row in enumerate(item_user.numpy())}
+
         os.makedirs(f'./dataset/{self.name}/pre_saved/', exist_ok=True)
-        torch.save(self.u_of_u, f'./dataset/{self.name}/pre_saved/u_of_u.pt')
-        torch.save(self.i_of_i, f'./dataset/{self.name}/pre_saved/i_of_i.pt') 
-        torch.save(self.u_of_i, f'./dataset/{self.name}/pre_saved/u_of_i.pt')
-        #torch.save(self.i_of_u, f'./dataset/{self.name}/pre_saved/i_of_u.pt')
-        torch.save(self.i_of_a, f'./dataset/{self.name}/pre_saved/i_of_a.pt')
+        #torch.save(self.u_of_u, f'./dataset/{self.name}/pre_saved/u_of_u.pt')
+        #torch.save(self.i_of_i, f'./dataset/{self.name}/pre_saved/i_of_i.pt') 
+        #torch.save(self.u_of_i, f'./dataset/{self.name}/pre_saved/u_of_i.pt')
+        torch.save(self.i_of_u, f'./dataset/{self.name}/pre_saved/i_of_u.pt')
+        #torch.save(self.i_of_a, f'./dataset/{self.name}/pre_saved/i_of_a.pt')
     
 
 class RecTrainDataset(torch.utils.data.Dataset):
@@ -207,8 +192,8 @@ class RecTrainDataset(torch.utils.data.Dataset):
     '''
     def __init__(self, args):
         print('Loading recommendation dataset...')
-        self.negnum = args['negnum']
         self.name = args['data']['name']
+        self.seed = args['seed']
         self._data_dir = f'./dataset/{self.name}/'
         self.data = pd.read_csv(os.path.join(self._data_dir, 'data_all.csv'))
         self.trainset = pd.read_csv(os.path.join(self._data_dir, 'train.csv'))
@@ -216,8 +201,16 @@ class RecTrainDataset(torch.utils.data.Dataset):
         self.rel2id = json.load(open(os.path.join(self._data_dir, 'relation2id.json')))
         # self.validset = pd.read_csv(os.path.join(self._data_dir, 'valid.csv'))
         # self.testset = pd.read_csv(os.path.join(self._data_dir, 'test.csv'))
-        self._sampler = NegativeSampler(self.name, self.data, self.ent2id, self.rel2id, self.negnum)
+        self._sampler = NegativeSampler(self.name, self.data, self.ent2id, self.rel2id)
 
+    @property
+    def num_users(self):
+        return config[self.name]['num_users']
+    
+    @property
+    def num_items(self):
+        return config[self.name]['num_items']
+    
     def __len__(self):
         return len(self.trainset)
     
@@ -230,7 +223,12 @@ class RecTrainDataset(torch.utils.data.Dataset):
         return user_id, item_id, review
 
     def negative_sample(self, users:torch.Tensor, items:torch.Tensor):
-        return self._sampler.neg_sample_fn(users, items)
+        S = self._sampler.UniformSample_original(self.seed, users, items)
+        # posUsers = torch.Tensor(S[:, 0]).long()
+        # posItems = torch.Tensor(S[:, 1]).long()
+        negItems = torch.Tensor(S[:, 2]).long()
+        return negItems
+
 
 class Sampler(object):
     """Base class for all sampler to sample negative items.
@@ -264,6 +262,8 @@ class NegativeSampler(Sampler):
         self.name = name
         self.e2id = ent2id
         self.r2id = rel2id
+        self.num_user = config[self.name]['num_users']
+        self.num_item = config[self.name]['num_items']
         self.num_neg = num_neg
 
         self.u_of_i = defaultdict(list)
@@ -275,61 +275,85 @@ class NegativeSampler(Sampler):
     
     def _load_uoi(self):
         self.u_of_i = torch.load(f'./dataset/{self.name}/pre_saved/u_of_i.pt')
-        #self.i_of_u = torch.load(f'./dataset/{self.name}/pre_saved/i_of_u.pt')
 
     def _count_uoi(self, users, items):
         for u, i in zip(users, items):
             u_id = self.e2id[u]
             i_id = self.e2id[i]
             self.u_of_i[u_id].append(i_id)
-            #self.i_of_u[i_id].append(u_id)
 
         for u in self.u_of_i.keys():
             self.u_of_i[u] = np.array(list(set(self.u_of_i[u])))
-        # for i in self.i_of_u.keys():
-        #     self.i_of_u[i] = np.array(list(set(self.i_of_u[i])))
         
         os.makedirs(f'./dataset/{self.name}/pre_saved/', exist_ok=True)
         torch.save(self.u_of_i, f'./dataset/{self.name}/pre_saved/u_of_i.pt')
-        #torch.save(self.i_of_u, f'./dataset/{self.name}/pre_saved/i_of_u.pt')
     
-    def neg_sample_fn(self, users, items):
-        #len_triples = batch_h.__len__()
-        batch_u_sample = np.repeat(users.view(-1, 1).cpu().numpy(), 1 + self.num_neg, axis = -1)
-        batch_i_sample = np.repeat(items.view(-1, 1).cpu().numpy(), 1 + self.num_neg, axis = -1)
-        for idx, (u, i) in enumerate(zip(users, items)):
-            last = 1
-            if self.num_neg > 0:
-                neg_items = self._normal_batch(u)
-                if len(neg_items) > 0:
-                    batch_i_sample[idx][last:last + len(neg_items)] = neg_items
-                    last += len(neg_items)
-        batch_users = batch_u_sample.transpose()
-        batch_items = batch_i_sample.transpose()
+    def UniformSample_original(self, seed, users, items, neg_ratio = 1):
+        if sample_ext:
+            sampling.seed(seed)
+            S = sampling.sample_negative(users, items, self.num_user, self.num_item,
+                                        self.u_of_i, neg_ratio)
+        else:
+            S = self._uniformSample_original_python(users, items)
+        return S
 
-        batch_users = torch.tensor(np.array(batch_users), dtype=torch.int32)
-        batch_items = torch.tensor(np.array(batch_items), dtype=torch.int32)
-        return batch_users, batch_items
-    
-    def _normal_batch(self, user):
-        neg_list_items = []
-        neg_cur_size = 0
-        while neg_cur_size < self.num_neg:
-            neg_tmp_items = self._corrupt_tail(user, num_max = (self.num_neg - neg_cur_size) * 2)
-            neg_list_items.append(neg_tmp_items)
-            neg_cur_size += len(neg_tmp_items)
-        if neg_list_items != []:
-            neg_list_items = np.concatenate(neg_list_items)
+    def _uniformSample_original_python(self, users, items):
+        """
+        the original impliment of BPR Sampling in LightGCN
+        :return:
+            np.array
+        """
+        S = []
+        for idx, (user, positem) in enumerate(zip(users, items)):
+            user = user.item()
+            posForUser = self.u_of_i[user]
+            while True:
+                negitem = np.random.randint(self.num_user, self.num_user + self.num_item)
+                if negitem in posForUser:
+                    continue
+                else:
+                    break
+            S.append([user, positem, negitem])
 
-        return neg_list_items[:self.num_neg]
+        return np.array(S)
+
+    # def neg_sample_fn(self, users, items):
+    #     #len_triples = batch_h.__len__()
+    #     batch_u_sample = np.repeat(users.view(-1, 1).cpu().numpy(), 1 + self.num_neg, axis = -1)
+    #     batch_i_sample = np.repeat(items.view(-1, 1).cpu().numpy(), 1 + self.num_neg, axis = -1)
+    #     for idx, (u, i) in enumerate(zip(users, items)):
+    #         last = 1
+    #         if self.num_neg > 0:
+    #             neg_items = self._normal_batch(u)
+    #             if len(neg_items) > 0:
+    #                 batch_i_sample[idx][last:last + len(neg_items)] = neg_items
+    #                 last += len(neg_items)
+    #     batch_users = batch_u_sample.transpose()
+    #     batch_items = batch_i_sample.transpose()
+
+    #     batch_users = torch.tensor(np.array(batch_users), dtype=torch.int32)
+    #     batch_items = torch.tensor(np.array(batch_items), dtype=torch.int32)
+    #     return batch_users, batch_items
     
-    def _corrupt_tail(self, user, num_max = 1000):
-        # try:
-        #     tmp = torch.tensor(random.sample(node_list.cpu().numpy().tolist(), k=num_max))
-        # except:
-        #     tmp = torch.tensor(random.sample(node_list.cpu().numpy().tolist(), k=len(node_list)))
-        tmp = torch.tensor(random.sample(range(config[self.name]['num_users'], config[self.name]['num_users'] + config[self.name]['num_items']), k=num_max))
-        user = user.item()
-        mask = np.in1d(ar1=tmp, ar2=self.u_of_i[user], assume_unique=True, invert=True)
-        neg = tmp[mask]
-        return neg
+    # def _normal_batch(self, user):
+    #     neg_list_items = []
+    #     neg_cur_size = 0
+    #     while neg_cur_size < self.num_neg:
+    #         neg_tmp_items = self._corrupt_tail(user, num_max = (self.num_neg - neg_cur_size) * 2)
+    #         neg_list_items.append(neg_tmp_items)
+    #         neg_cur_size += len(neg_tmp_items)
+    #     if neg_list_items != []:
+    #         neg_list_items = np.concatenate(neg_list_items)
+
+    #     return neg_list_items[:self.num_neg]
+    
+    # def _corrupt_tail(self, user, num_max = 1000):
+    #     # try:
+    #     #     tmp = torch.tensor(random.sample(node_list.cpu().numpy().tolist(), k=num_max))
+    #     # except:
+    #     #     tmp = torch.tensor(random.sample(node_list.cpu().numpy().tolist(), k=len(node_list)))
+    #     tmp = torch.tensor(random.sample(range(config[self.name]['num_users'], config[self.name]['num_users'] + config[self.name]['num_items']), k=num_max))
+    #     user = user.item()
+    #     mask = np.in1d(ar1=tmp, ar2=self.u_of_i[user], assume_unique=True, invert=True)
+    #     neg = tmp[mask]
+    #     return neg

@@ -23,6 +23,6 @@ if __name__ == '__main__':
 
     kg_data_loader = torch.utils.data.DataLoader(rec_data, batch_size=args['batch_size'], shuffle=True, num_workers=args['dataloader_n_workers'])
 
-    for (pos_users, pos_items, reviews) in kg_data_loader:
-        sampled_users, sampled_items = rec_data.negative_sample(pos_users, pos_items)
-        subgraphs = extractor.sample_subgraph(['uu', 'ui', 'iu', 'ii'], sampled_users, sampled_items)
+    for (users, pos_items, reviews) in kg_data_loader:
+        neg_items = rec_data.negative_sample(users, pos_items)
+        subgraphs = extractor.sample_subgraph(['uu', 'ui', 'ii'], users, pos_items, neg_items)
