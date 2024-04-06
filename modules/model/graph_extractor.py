@@ -1,12 +1,12 @@
 import torch
 from torch import nn as nn
 import random
-from .dataset import KGRecDataset
 from collections import defaultdict
 from tqdm import tqdm
 import os
 import numpy as np
 
+from ..data import KGRecDataset
 class Extractor():
     '''
     Extracting subgraphs based on one-hop neighbours. When the core node is user, there should be two subgraphs:(user->user, user->item); when the core node is item, 

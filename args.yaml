@@ -1,9 +1,16 @@
-cuda: 0
+cuda: 4
 seed: 42
 data:
       name: 'AmazonBookTiny'
+learning_rate : 0.01
 epoch: 100
+start_epoch : 0
 batch_size: 256
 n_iter: 2
 max_sample_neighbors : 4
 dataloader_n_workers : 4
+embedding_dim: 200
+hidden_embedding_dim : 400
+isPretrain: 0
+n_layers_lightgcn: 3
+loss_reg_weight : 0.01

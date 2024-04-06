@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-import random
+import scipy.sparse as sp
 import torch 
 import torch_geometric
 from torch_geometric.data import Data
@@ -8,6 +8,7 @@ import os
 import json
 from collections import (defaultdict, Iterable, OrderedDict)
 from tqdm import tqdm
+from ..utils import sp_mat_to_sp_tensor
 try:
     from cppimport import imp_from_filepath
     from os.path import join, dirname
@@ -18,7 +19,7 @@ except:
     print("Cpp extension not loaded")
     sample_ext = False
 
-config = {
+data_config = {
     'AmazonBook' : {
         'user' : 'User_id',
         'item' : 'Id',
@@ -51,8 +52,8 @@ class KGRecDataset(torch_geometric.data.Dataset):
         #self.triples = pd.read_csv(os.path.join(self._data_dir, 'triples.csv')) # Load the triples in three rows('head', 'relation', 'tail')
         self.ent2id = json.load(open(os.path.join(self._data_dir, 'entity2id.json')))
         self.rel2id = json.load(open(os.path.join(self._data_dir, 'relation2id.json')))
-        self.num_user = config[self.name]['num_users']
-        self.num_items = config[self.name]['num_items']
+        self.num_user = data_config[self.name]['num_users']
+        self.num_items = data_config[self.name]['num_items']
 
         self.i_of_u = defaultdict(list) ## item-user with Liked relation
         self.u_of_i = defaultdict(list) ## user-item with Liked relation
@@ -202,23 +203,28 @@ class RecTrainDataset(torch.utils.data.Dataset):
         # self.validset = pd.read_csv(os.path.join(self._data_dir, 'valid.csv'))
         # self.testset = pd.read_csv(os.path.join(self._data_dir, 'test.csv'))
         self._sampler = NegativeSampler(self.name, self.data, self.ent2id, self.rel2id)
+        self.norm_adj = sp_mat_to_sp_tensor(self._create_adj())
 
     @property
     def num_users(self):
-        return config[self.name]['num_users']
+        return data_config[self.name]['num_users']
     
     @property
     def num_items(self):
-        return config[self.name]['num_items']
+        return data_config[self.name]['num_items']
+    
+    @property
+    def get_norm_adj(self):
+        return self.norm_adj
     
     def __len__(self):
         return len(self.trainset)
     
     def __getitem__(self, idx):
-        user_id = self.ent2id[self.trainset.iloc[idx][config[self.name]['user']]]
-        item_id = self.ent2id[self.trainset.iloc[idx][config[self.name]['item']]]
+        user_id = self.ent2id[self.trainset.iloc[idx][data_config[self.name]['user']]]
+        item_id = self.ent2id[self.trainset.iloc[idx][data_config[self.name]['item']]]
         #user_id_negsampled, item_id_negsampled = self._sampler.neg_sample_fn(user_id, item_id)
-        review = self.trainset.iloc[idx][config[self.name]['review']]
+        review = self.trainset.iloc[idx][data_config[self.name]['review']]
         #return user_id_negsampled, item_id_negsampled, review
         return user_id, item_id, review
 
@@ -228,6 +234,29 @@ class RecTrainDataset(torch.utils.data.Dataset):
         # posItems = torch.Tensor(S[:, 1]).long()
         negItems = torch.Tensor(S[:, 2]).long()
         return negItems
+    
+    def _create_adj(self):
+        nodes_num = self.num_users + self.num_items
+        users_np = np.array([
+            self.ent2id[self.trainset.iloc[idx][data_config[self.name]['user']]] for idx in range(len(self.trainset))
+        ])
+        items_np = np.array([
+            self.ent2id[self.trainset.iloc[idx][data_config[self.name]['item']]] for idx in range(len(self.trainset))
+        ])   
+
+        ratings = np.ones_like(users_np, dtype=np.float32)
+        tmp_adj = sp.csr_matrix((ratings, (users_np, items_np)), shape=(nodes_num, nodes_num))
+        adj_mat = tmp_adj + tmp_adj.T
+
+        # normalize adjcency matrix
+        rowsum = np.array(adj_mat.sum(1))
+        d_inv = np.power(rowsum, -0.5).flatten()
+        d_inv[np.isinf(d_inv)] = 0.
+        d_mat_inv = sp.diags(d_inv)
+        norm_adj_tmp = d_mat_inv.dot(adj_mat)
+        adj_matrix = norm_adj_tmp.dot(d_mat_inv)
+
+        return adj_matrix
 
 
 class Sampler(object):
@@ -262,8 +291,8 @@ class NegativeSampler(Sampler):
         self.name = name
         self.e2id = ent2id
         self.r2id = rel2id
-        self.num_user = config[self.name]['num_users']
-        self.num_item = config[self.name]['num_items']
+        self.num_user = data_config[self.name]['num_users']
+        self.num_item = data_config[self.name]['num_items']
         self.num_neg = num_neg
 
         self.u_of_i = defaultdict(list)
@@ -271,7 +300,7 @@ class NegativeSampler(Sampler):
         if os.path.exists(f'./dataset/{name}/pre_saved/'):
             self._load_uoi()
         else:
-            self._count_uoi(dataset[config[self.name]['user']], dataset[config[self.name]['item']])
+            self._count_uoi(dataset[data_config[self.name]['user']], dataset[data_config[self.name]['item']])
     
     def _load_uoi(self):
         self.u_of_i = torch.load(f'./dataset/{self.name}/pre_saved/u_of_i.pt')
@@ -352,7 +381,7 @@ class NegativeSampler(Sampler):
     #     #     tmp = torch.tensor(random.sample(node_list.cpu().numpy().tolist(), k=num_max))
     #     # except:
     #     #     tmp = torch.tensor(random.sample(node_list.cpu().numpy().tolist(), k=len(node_list)))
-    #     tmp = torch.tensor(random.sample(range(config[self.name]['num_users'], config[self.name]['num_users'] + config[self.name]['num_items']), k=num_max))
+    #     tmp = torch.tensor(random.sample(range(data_config[self.name]['num_users'], data_config[self.name]['num_users'] + data_config[self.name]['num_items']), k=num_max))
     #     user = user.item()
     #     mask = np.in1d(ar1=tmp, ar2=self.u_of_i[user], assume_unique=True, invert=True)
     #     neg = tmp[mask]
