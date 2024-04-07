@@ -1,11 +1,3 @@
-/*
-<%
-cfg['compiler_args'] = ['-std=c++11', '-undefined dynamic_lookup']
-%>
-<%
-setup_pybind11(cfg)
-%>
-*/
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
@@ -28,14 +20,15 @@ int randint_(int low, int high)
     return distrib(gen); 
 }
 
-py::array_t<int> sample_negative(py::array_t<int> users, py::array_t<int> items, py::dict allPos, int num_users, int num_items, int neg_num) {
+py::array_t<int> sample_negative(py::array_t<int> users, py::array_t<int> items, py::dict allPos, int num_users, int num_items) {
     auto users_buf = users.request();
     auto items_buf = items.request();
     int *users_ptr = (int *)users_buf.ptr;
     int *items_ptr = (int *)items_buf.ptr;
-    int batch_size = users_buf.shape[1];
-
+    int batch_size = users_buf.shape[0];
+    int neg_num = items_buf.shape[0];
     int row = neg_num + 2;
+    
     py::array_t<int> S_array = py::array_t<int>({batch_size, row});
     py::buffer_info buf_S = S_array.request();
     int *ptr = (int *)buf_S.ptr;
@@ -61,39 +54,8 @@ py::array_t<int> sample_negative(py::array_t<int> users, py::array_t<int> items,
             ptr[idx * row + i] = negitem;
         }
     }
-
     return S_array;
 }
-
-// py::array_t<int> sample_negative_ByUser(std::vector<int> users, int item_num, std::vector<std::vector<int>> allPos, int neg_num)
-// {
-//     int row = neg_num + 2;
-//     int col = users.size();
-//     py::array_t<int> S_array = py::array_t<int>({col, row});
-//     py::buffer_info buf_S = S_array.request();
-//     int *ptr = (int *)buf_S.ptr;
-
-//     for (int user_i = 0; user_i < users.size(); user_i++)
-//     {
-//         int user = users[user_i];
-//         std::vector<int> pos_item = allPos[user];
-//         int negitem = 0;
-
-//         ptr[user_i * row] = user;
-//         ptr[user_i * row + 1] = pos_item[randint_(pos_item.size())];
-
-//         for (int neg_i = 2; neg_i < row; neg_i++)
-//         {
-//             do
-//             {
-//                 negitem = randint_(item_num);
-//             } while (
-//                 find(pos_item.begin(), pos_item.end(), negitem) != pos_item.end());
-//             ptr[user_i * row + neg_i] = negitem;
-//         }
-//     }
-//     return S_array;
-// }
 
 void set_seed(unsigned int seed)
 {
@@ -102,15 +64,21 @@ void set_seed(unsigned int seed)
 
 using namespace py::literals;
 
-PYBIND11_MODULE(sampling, m)
+PYBIND11_MODULE(SampleFunction, m)
 {
     srand(time(0));
     // srand(2020);
     m.doc() = "example plugin";
-    // m.def("randint", &randint_, "generate int between [0 end]", "end"_a);
-    // m.def("seed", &set_seed, "set random seed", "seed"_a);
+    m.def("randint", &randint_, "generate int between [0 end]", "low", "high");
+    m.def("seed", &set_seed, "set random seed", "seed");
     m.def("sample_negative", &sample_negative, "sampling negatives for all",
-          "user_num"_a, "item_num"_a, "train_num"_a, "allPos"_a, "neg_num"_a);
-    // m.def("sample_negative_ByUser", &sample_negative_ByUser, "sampling negatives for given users",
-    //       "users"_a, "item_num"_a, "allPos"_a, "neg_num"_a);
+          "user", "item", "allPos", "num_users", "num_items");
 }
+/*
+<%
+cfg['compiler_args'] = ['-std=c++11', '-undefined dynamic_lookup']
+%>
+<%
+setup_pybind11(cfg)
+%>
+*/

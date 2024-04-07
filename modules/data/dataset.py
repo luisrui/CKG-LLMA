@@ -9,16 +9,17 @@ import json
 from collections import (defaultdict, Iterable, OrderedDict)
 from tqdm import tqdm
 from ..utils import sp_mat_to_sp_tensor
-try:
+try:     
     from cppimport import imp_from_filepath
     from os.path import join, dirname
-    path = join(dirname(__file__), "sources/sampling.cpp")
-    sampling = imp_from_filepath(path)
+    path = join(dirname(__file__), "SampleFunction.cpp")
+    SampleFunction = imp_from_filepath(path)
     sample_ext = True
-except:
+except Exception as e:
+    print("Error message:", str(e))
     print("Cpp extension not loaded")
     sample_ext = False
-
+    
 data_config = {
     'AmazonBook' : {
         'user' : 'User_id',
@@ -317,11 +318,12 @@ class NegativeSampler(Sampler):
         os.makedirs(f'./dataset/{self.name}/pre_saved/', exist_ok=True)
         torch.save(self.u_of_i, f'./dataset/{self.name}/pre_saved/u_of_i.pt')
     
-    def UniformSample_original(self, seed, users, items, neg_ratio = 1):
+    def UniformSample_original(self, seed, users, items):
         if sample_ext:
-            sampling.seed(seed)
-            S = sampling.sample_negative(users, items, self.num_user, self.num_item,
-                                        self.u_of_i, neg_ratio)
+            SampleFunction.seed(seed)
+            # users = np.asarray(users, dtype=np.int32)
+            # items = np.asarray(items, dtype=np.int32)
+            S = SampleFunction.sample_negative(users, items, self.u_of_i, self.num_user, self.num_item)
         else:
             S = self._uniformSample_original_python(users, items)
         return S
@@ -345,44 +347,3 @@ class NegativeSampler(Sampler):
             S.append([user, positem, negitem])
 
         return np.array(S)
-
-    # def neg_sample_fn(self, users, items):
-    #     #len_triples = batch_h.__len__()
-    #     batch_u_sample = np.repeat(users.view(-1, 1).cpu().numpy(), 1 + self.num_neg, axis = -1)
-    #     batch_i_sample = np.repeat(items.view(-1, 1).cpu().numpy(), 1 + self.num_neg, axis = -1)
-    #     for idx, (u, i) in enumerate(zip(users, items)):
-    #         last = 1
-    #         if self.num_neg > 0:
-    #             neg_items = self._normal_batch(u)
-    #             if len(neg_items) > 0:
-    #                 batch_i_sample[idx][last:last + len(neg_items)] = neg_items
-    #                 last += len(neg_items)
-    #     batch_users = batch_u_sample.transpose()
-    #     batch_items = batch_i_sample.transpose()
-
-    #     batch_users = torch.tensor(np.array(batch_users), dtype=torch.int32)
-    #     batch_items = torch.tensor(np.array(batch_items), dtype=torch.int32)
-    #     return batch_users, batch_items
-    
-    # def _normal_batch(self, user):
-    #     neg_list_items = []
-    #     neg_cur_size = 0
-    #     while neg_cur_size < self.num_neg:
-    #         neg_tmp_items = self._corrupt_tail(user, num_max = (self.num_neg - neg_cur_size) * 2)
-    #         neg_list_items.append(neg_tmp_items)
-    #         neg_cur_size += len(neg_tmp_items)
-    #     if neg_list_items != []:
-    #         neg_list_items = np.concatenate(neg_list_items)
-
-    #     return neg_list_items[:self.num_neg]
-    
-    # def _corrupt_tail(self, user, num_max = 1000):
-    #     # try:
-    #     #     tmp = torch.tensor(random.sample(node_list.cpu().numpy().tolist(), k=num_max))
-    #     # except:
-    #     #     tmp = torch.tensor(random.sample(node_list.cpu().numpy().tolist(), k=len(node_list)))
-    #     tmp = torch.tensor(random.sample(range(data_config[self.name]['num_users'], data_config[self.name]['num_users'] + data_config[self.name]['num_items']), k=num_max))
-    #     user = user.item()
-    #     mask = np.in1d(ar1=tmp, ar2=self.u_of_i[user], assume_unique=True, invert=True)
-    #     neg = tmp[mask]
-    #     return neg

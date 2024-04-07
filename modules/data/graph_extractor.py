@@ -6,7 +6,8 @@ from tqdm import tqdm
 import os
 import numpy as np
 
-from ..data import KGRecDataset
+from .dataset import KGRecDataset
+
 class Extractor():
     '''
     Extracting subgraphs based on one-hop neighbours. When the core node is user, there should be two subgraphs:(user->user, user->item); when the core node is item, 
@@ -135,7 +136,7 @@ class Extractor():
         for aug_tupe in aug_types:
             
             if aug_tupe == 'uu':
-                # User -> User Subgraph
+                 # User -> User Subgraph
                 user_neighbors = [list(set(self.u_of_u[user.item()]) & set(batch_users.tolist())) for user in batch_users]
                 user_neighbors_lens = [len(nbrs) for nbrs in user_neighbors]
                 max_len = max(user_neighbors_lens)

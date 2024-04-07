@@ -1,4 +1,4 @@
-cuda: 4
+cuda: 3
 seed: 42
 data:
       name: 'AmazonBookTiny'
