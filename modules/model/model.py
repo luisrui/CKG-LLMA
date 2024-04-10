@@ -5,16 +5,56 @@ import torch.sparse as torch_sp
 import torch.nn.functional as F
 import numpy as np
 import scipy.sparse as sp
+import os
+import json
 
 from ..data import data_config
-from ..utils import (inner_product, sp_mat_to_sp_tensor, l2_loss)
+from ..utils import (inner_product, l2_loss, MarginLoss)
 
 class BasicModel(nn.Module):    
     def __init__(self):
         super(BasicModel, self).__init__()
     
-    def getUsersRating(self, users):
-        raise NotImplementedError
+    def load_checkpoint(self, path, device):
+        self.load_state_dict(torch.load(os.path.join(path), map_location=device))
+        self.eval()
+
+    def save_checkpoint(self, path):
+        torch.save(self.state_dict(), path)
+    
+    def load_parameters(self, path):
+        f = open(path, "r")
+        parameters = json.loads(f.read())
+        f.close()
+        for i in parameters:
+            parameters[i] = torch.Tensor(parameters[i])
+        self.load_state_dict(parameters, strict = False)
+        self.eval()
+
+    def save_parameters(self, path):
+        f = open(path, "w")
+        f.write(json.dumps(self.get_parameters("list")))
+        f.close()
+
+    def get_parameters(self, mode = "numpy", param_dict = None):
+        all_param_dict = self.state_dict()
+        if param_dict == None:
+            param_dict = all_param_dict.keys()
+        res = {}
+        for param in param_dict:
+            if mode == "numpy":
+                res[param] = all_param_dict[param].cpu().numpy()
+            elif mode == "list":
+                res[param] = all_param_dict[param].cpu().numpy().tolist()
+            else:
+                res[param] = all_param_dict[param]
+        return res
+
+    def set_parameters(self, parameters):
+        for i in parameters:
+            parameters[i] = torch.Tensor(parameters[i])
+        self.load_state_dict(parameters, strict = False)
+        self.eval()    
 
 class LightGCN(BasicModel):
     def __init__(self, num_users, num_items, embed_dim, norm_adj, n_layers):
@@ -117,16 +157,20 @@ class Model(BasicModel):
         self.device = device
 
         self.n_layers = args['n_layers_lightgcn']
+        self.kge_weight = args['loss_kge_weight']
         self.reg_weight = args['loss_reg_weight']
 
         # users, items, features
         self.num_users = data_config[args["data"]["name"]]['num_users']
         self.num_items = data_config[args["data"]["name"]]['num_items']
-        self.ent_embeddings = nn.Embedding(num_embeddings=len(ent2id), embedding_dim=args['embedding_dim'])
+        self.ent_embeddings_kge = nn.Embedding(num_embeddings=len(ent2id), embedding_dim=args['embedding_dim'])
+        self.ui_embeddings = nn.Embedding(num_embeddings=self.num_users + self.num_items, embedding_dim=args['embedding_dim'])
+        self.ent_embeddings_llm = nn.Embedding(num_embeddings=len(ent2id), embedding_dim=args['embedding_dim'])
         self.rel_embeddings = nn.Embedding(num_embeddings=len(rel2id), embedding_dim=args['embedding_dim'])
+        #self.rel_embedding = nn.Parameter(torch.empty(1, args['embedding_dim']))
         if args['isPretrain'] == 0:
             nn.init.normal_(self.ent_embeddings.weight, std=0.1)
-            nn.init.normal_(self.rel_embeddings.weight, std=0.1)
+            nn.init.normal_(self.rel_embedding, std=0.1)
         else:
             self.ent_embeddings.weight.data.copy_(torch.from_numpy(self.config['user_emb']))
             self.rel_embeddings.weight.data.copy_(torch.from_numpy(self.config['item_emb']))
@@ -134,11 +178,15 @@ class Model(BasicModel):
 
         self.norm_adj = norm_adj.to(device)
 
+        self.KGEmodel = TransE()
+        self.KGEloss = MarginLoss(margin=3.0)
         self.conv_gcn1 = RGCNConv(in_channels=args['embedding_dim'], out_channels=args['hidden_embedding_dim'], num_relations=len(rel2id), num_bases=len(rel2id))
         self.conv_gcn2 = RGCNConv(in_channels=args['hidden_embedding_dim'], out_channels=args['embedding_dim'], num_relations=len(rel2id), num_bases=len(rel2id))
-        self.act_func = nn.LeakyReLU()
+        self.act_func = nn.LeakyReLU(negative_slope=0.2)
+        self.remap_layer = nn.Linear(args['embedding_dim'] * 3, args['embedding_dim'])
         
     def forward(self, edge_indexs, edge_types, users, items, neg_items):
+        ### KG Embedding Learning
         x_list = []
         for edge_index, edge_type in zip(edge_indexs, edge_types):
             edge_index = edge_index.to(self.device)
@@ -147,13 +195,19 @@ class Model(BasicModel):
             x = self.act_func(x)
             x = self.conv_gcn2(x, edge_index, edge_type)
             x_list.append(x)
-        x_mean = torch.stack(x_list, dim=0).mean(dim=0)
 
-        # keep residue
-        # self.ent_embeddings.weight.data = self.ent_embeddings.weight.data + x_mean
-        # directly replace
-        self.ent_embeddings.weight.data = x_mean
+        #Concatenation and Projection
+        x = torch.concat(x_list, dim=-1)
+        x = F.normalize(x, p=2, dim=1)
+        x = self.remap_layer(x)
 
+        head = torch.cat([x[users]] * 2, dim = 0)
+        tail = torch.cat([x[items], x[neg_items]], dim = 0)
+        rels = self.rel_embedding.expand(head.shape[0], -1)
+        pos_score, neg_score = self.KGEmodel(head, tail, rels)
+        kge_loss = self.KGEloss(pos_score, neg_score)
+
+        ### Rate Prediction Training
         user_embeddings, item_embeddings = self._forward_lightgcn(self.norm_adj)
 
         user_embs = F.embedding(users, user_embeddings)
@@ -171,11 +225,12 @@ class Model(BasicModel):
             self.ent_embeddings(users),
             self.ent_embeddings(items),
             self.ent_embeddings(neg_items),
+            self.rel_embedding
         )
         
-        total_loss = bpr_loss + self.reg_weight * reg_loss
-        return total_loss
-
+        total_loss = bpr_loss + self.reg_weight * reg_loss + self.kge_weight * kge_loss
+        return total_loss, bpr_loss, kge_loss
+ 
     def _forward_lightgcn(self, norm_adj):
         ego_embeddings = self.ent_embeddings.weight[:self.num_users + self.num_items]
         all_embeddings = [ego_embeddings]
@@ -192,3 +247,48 @@ class Model(BasicModel):
 
         return user_embeddings, item_embeddings
     
+    def getUsersRating(self, users):
+        users_emb = self.ui_embeddings(users)
+        items_emb = self.ui_embeddings.weight[self.num_users:]
+        rating = nn.Sigmoid(torch.matmul(users_emb, items_emb.T))
+        return rating
+
+class TransE(nn.Module):
+    '''
+    TransE Model
+
+    Compute the score of the triplets based on:
+        score = ||h + r - t||_p
+    '''
+    def __init__(self, score_norm_flag : bool = False, p_norm : int = 1):
+        super(TransE, self).__init__()
+        self.score_norm_flag = score_norm_flag
+        self.p_norm = p_norm
+
+    def forward(self, head, tail, rel, mode='normal'):
+        if self.score_norm_flag:
+            head = F.normalize(head, 2, -1)
+            rel = F.normalize(rel, 2, -1)
+            tail = F.normalize(tail, 2, -1)
+        if mode != 'normal':
+            head = head.view(-1, rel.shape[0], head.shape[-1])
+            tail = tail.view(-1, rel.shape[0], tail.shape[-1])
+            rel = rel.view(-1, rel.shape[0], rel.shape[-1])
+        if mode == 'head_batch':
+            score = head + (rel - tail)
+        else:
+            score = (head + rel) - tail
+        score = torch.norm(score, self.p_norm, -1).flatten()
+        pos_score = self._get_positive_score(score, head.shape[0] // 2)
+        neg_score = self._get_negative_score(score, head.shape[0] // 2)
+        return pos_score, neg_score
+    
+    def _get_positive_score(self, score, num_pos_samples):
+        positive_score = score[:num_pos_samples]
+        positive_score = positive_score.view(-1, num_pos_samples).permute(1, 0)
+        return positive_score
+
+    def _get_negative_score(self, score, num_pos_samples):
+        negative_score = score[num_pos_samples:]
+        negative_score = negative_score.view(-1, num_pos_samples).permute(1, 0)
+        return negative_score

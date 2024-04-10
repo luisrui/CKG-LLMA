@@ -1,6 +1,8 @@
 from modules.data import *
 from modules.utils import *
 from modules.model import *
+from modules.procedure import Test
+
 from collections import deque
 from tqdm import trange
 import torch 
@@ -43,16 +45,20 @@ if __name__ == '__main__':
             pos_items = pos_items.to(device)
             neg_items = neg_items.to(device)
 
-            loss = model(edge_indexs, edge_types, users, pos_items, neg_items)
+            loss, bpr_loss, kge_loss = model(edge_indexs, edge_types, users, pos_items, neg_items)
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             losses.append(loss.item())
-            epoch_counter.set_description("Epoch %d |loss: %.3f" % (
+            epoch_counter.set_description("Epoch %d |loss: %.3f |bpr_loss: %.3f |kge_loss: %.3f" % (
                 e + 1,
-                np.mean(losses)
+                np.mean(losses),
+                bpr_loss.item(),
+                kge_loss.item()
                 )
             )
+    
+    result = Test(args, rec_data, kg_data, model, 'valid', device)
 

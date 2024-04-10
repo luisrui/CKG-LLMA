@@ -22,7 +22,7 @@ def set_random_seed(seed=2020):
     random.seed(seed)
     torch.backends.cudnn.deterministic = True
 
-def triples_transfer_to_graph(subgraphs: list, ent2id : dict, rel2id : dict):
+def triples_transfer_to_graph(subgraphs: list):
     edge_index_list = []
     edge_type_list = []
 
@@ -49,3 +49,15 @@ def sp_mat_to_sp_tensor(sp_mat):
     coo = sp_mat.tocoo().astype(np.float32)
     indices = torch.from_numpy(np.asarray([coo.row, coo.col]))
     return torch.sparse_coo_tensor(indices, coo.data, coo.shape).coalesce()
+
+def minibatch(*tensors, **kwargs):
+
+    batch_size = kwargs.get('batch_size', 32)
+
+    if len(tensors) == 1:
+        tensor = tensors[0]
+        for i in range(0, len(tensor), step=batch_size):
+            yield tensor[i:i + batch_size]
+    else:
+        for i in range(0, len(tensors[0]), batch_size):
+            yield tuple(x[i:i + batch_size] for x in tensors)

@@ -186,7 +186,10 @@ class KGRecDataset(torch_geometric.data.Dataset):
         #torch.save(self.u_of_i, f'./dataset/{self.name}/pre_saved/u_of_i.pt')
         torch.save(self.i_of_u, f'./dataset/{self.name}/pre_saved/i_of_u.pt')
         #torch.save(self.i_of_a, f'./dataset/{self.name}/pre_saved/i_of_a.pt')
-    
+
+    def get_all_pos(self, users):
+        posItems = [self.u_of_i[user] for user in users]
+        return posItems
 
 class RecTrainDataset(torch.utils.data.Dataset):
     '''
@@ -196,13 +199,18 @@ class RecTrainDataset(torch.utils.data.Dataset):
         print('Loading recommendation dataset...')
         self.name = args['data']['name']
         self.seed = args['seed']
+
         self._data_dir = f'./dataset/{self.name}/'
         self.data = pd.read_csv(os.path.join(self._data_dir, 'data_all.csv'))
         self.trainset = pd.read_csv(os.path.join(self._data_dir, 'train.csv'))
+        self.validset = pd.read_csv(os.path.join(self._data_dir, 'valid.csv'))
+        self.testset = pd.read_csv(os.path.join(self._data_dir, 'test.csv'))
+        self.wrapped_valid_set = self.__build_test_rp(self.validset)
+        self.wrapped_test_set = self.__build_test_rp(self.testset)
+
         self.ent2id = json.load(open(os.path.join(self._data_dir, 'entity2id.json')))
         self.rel2id = json.load(open(os.path.join(self._data_dir, 'relation2id.json')))
-        # self.validset = pd.read_csv(os.path.join(self._data_dir, 'valid.csv'))
-        # self.testset = pd.read_csv(os.path.join(self._data_dir, 'test.csv'))
+
         self._sampler = NegativeSampler(self.name, self.data, self.ent2id, self.rel2id)
         self.norm_adj = sp_mat_to_sp_tensor(self._create_adj())
 
@@ -258,6 +266,28 @@ class RecTrainDataset(torch.utils.data.Dataset):
         adj_matrix = norm_adj_tmp.dot(d_mat_inv)
 
         return adj_matrix
+    
+    def __build_test_rp(self, dataset):
+        """
+        Build the test or valid data for ranking prediction.
+        """
+        test_data = defaultdict(list)
+
+        for i in range(len(dataset)):
+            user = dataset.iloc[i][data_config[self.name]['user']]
+            item = dataset.iloc[i][data_config[self.name]['item']]
+            test_data[user].append(item)
+        
+        return test_data
+
+    def get_wrapped_set(self, mode):
+        if mode == 'valid':
+            return self.wrapped_valid_set
+        elif mode == 'test':
+            return self.wrapped_test_set
+        else:
+            raise ValueError('Invalid mode. Please choose from "valid" or "test".')
+
 
 
 class Sampler(object):
