@@ -6,3 +6,5 @@
 **/pretrained_models
 *.zip
 **/.vscode
+**.so
+**.rendered.**.cpp

@@ -16,7 +16,6 @@ class Extractor():
     def __init__(self, args : dict, num_user : int, num_items : int, ent2id : list, rel2id : list, srcKG : KGRecDataset):
 
         print('Initializing Subgraph Extractor...')
-        self.n_iter = args['n_iter']
         self.max_neighbors = args['max_sample_neighbors']
         self.name = args['data']['name']
 
@@ -34,26 +33,6 @@ class Extractor():
         self.i_of_i = srcKG.i_of_i
         self.i_of_a = srcKG.i_of_a
         self.i_of_u = srcKG.i_of_u
-
-    def _get_neighbors(self, v):  # -> tuple[list, list]:
-        """
-        v is batch sized indices for items
-        v: [batch_size, 1]
-        """
-        entities = [v]
-        relations = []
-
-        for h in range(self.n_iter):
-            neighbor_entities = (
-                torch.LongTensor(self.adj_ent[entities[h]]).view((self.batch_size, -1))
-            )
-            neighbor_relations = (
-                torch.LongTensor(self.adj_rel[entities[h]]).view((self.batch_size, -1))
-            )
-            entities.append(neighbor_entities)
-            relations.append(neighbor_relations)
-
-        return entities, relations
 
     # def sample_subgraph(self, aug_types : list, batch_users : torch.Tensor, batch_items : torch.Tensor):
     #     '''

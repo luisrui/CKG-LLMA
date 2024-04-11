@@ -8,7 +8,7 @@ import scipy.sparse as sp
 import os
 import json
 
-from ..data import data_config
+from ..data import data_config, NegativeSampler
 from ..utils import (inner_product, l2_loss, MarginLoss)
 
 class BasicModel(nn.Module):    
@@ -150,7 +150,7 @@ class LightGCN(BasicModel):
         self._user_embeddings_final, self._item_embeddings_final = self._forward_gcn(self.norm_adj)
 
 class Model(BasicModel):
-    def __init__(self, args : dict, norm_adj, ent2id : dict, rel2id : dict, device : str):
+    def __init__(self, args : dict, norm_adj, kg, ent2id : dict, rel2id : dict, device : str):
         super(Model, self).__init__()
         self.ent2id = ent2id
         self.rel2id = rel2id
@@ -178,6 +178,7 @@ class Model(BasicModel):
 
         self.norm_adj = norm_adj.to(device)
 
+        self.Neg_Sampler = NegativeSampler(args['data']['name'], kg, ent2id, rel2id, args['kg_neg_size'])
         self.KGEmodel = TransE()
         self.KGEloss = MarginLoss(margin=3.0)
         self.conv_gcn1 = RGCNConv(in_channels=args['embedding_dim'], out_channels=args['hidden_embedding_dim'], num_relations=len(rel2id), num_bases=len(rel2id))
@@ -186,7 +187,7 @@ class Model(BasicModel):
         self.remap_layer = nn.Linear(args['embedding_dim'] * 3, args['embedding_dim'])
         
     def forward(self, edge_indexs, edge_types, users, items, neg_items):
-        ### KG Embedding Learning
+        ### KG Embedding Learning(only training the ent_embeddings)
         x_list = []
         for edge_index, edge_type in zip(edge_indexs, edge_types):
             edge_index = edge_index.to(self.device)
@@ -201,13 +202,20 @@ class Model(BasicModel):
         x = F.normalize(x, p=2, dim=1)
         x = self.remap_layer(x)
 
-        head = torch.cat([x[users]] * 2, dim = 0)
-        tail = torch.cat([x[items], x[neg_items]], dim = 0)
-        rels = self.rel_embedding.expand(head.shape[0], -1)
-        pos_score, neg_score = self.KGEmodel(head, tail, rels)
+        merged_edge_index = torch.cat(edge_indexs, dim=1)
+        merged_edge_type = torch.cat(edge_types)
+        edge_index_expand, edge_type_expand = self.Neg_Sampler.Triples_neg_sample(merged_edge_index, merged_edge_type)
+        edge_index_expand = edge_index_expand.to(self.device)
+        edge_type_expand = edge_type_expand.to(self.device)
+
+        head = x[edge_index_expand[0].long()]
+        tail = x[edge_index_expand[1].long()]
+        rels = self.rel_embeddings(edge_type_expand)
+
+        pos_score, neg_score = self.KGEmodel(head, tail, rels, len(merged_edge_type))
         kge_loss = self.KGEloss(pos_score, neg_score)
 
-        ### Rate Prediction Training
+        ### Rate Prediction Training(only training the ui_embeddings)
         user_embeddings, item_embeddings = self._forward_lightgcn(self.norm_adj)
 
         user_embs = F.embedding(users, user_embeddings)
@@ -218,22 +226,23 @@ class Model(BasicModel):
         sup_neg_ratings = inner_product(user_embs, neg_item_embs)   # [batch_size]
         sup_logits = sup_pos_ratings - sup_neg_ratings              # [batch_size]
 
-        # BPR Loss
         bpr_loss = -torch.sum(F.logsigmoid(sup_logits))
+
         # Reg Loss
         reg_loss = l2_loss(
-            self.ent_embeddings(users),
-            self.ent_embeddings(items),
-            self.ent_embeddings(neg_items),
-            self.rel_embedding
+            self.ui_embeddings(users),
+            self.ui_embeddings(items),
+            self.ui_embeddings(neg_items)
         )
         
         total_loss = bpr_loss + self.reg_weight * reg_loss + self.kge_weight * kge_loss
         return total_loss, bpr_loss, kge_loss
  
     def _forward_lightgcn(self, norm_adj):
-        ego_embeddings = self.ent_embeddings.weight[:self.num_users + self.num_items]
-        all_embeddings = [ego_embeddings]
+        '''
+        Forward pass of LightGCN(Learning the ui embeddings)
+        '''
+        all_embeddings = [self.ui_embeddings.weight]
 
         for k in range(self.n_layers):
             if isinstance(norm_adj, list):
@@ -265,7 +274,7 @@ class TransE(nn.Module):
         self.score_norm_flag = score_norm_flag
         self.p_norm = p_norm
 
-    def forward(self, head, tail, rel, mode='normal'):
+    def forward(self, head, tail, rel, pos_num, mode='normal'):
         if self.score_norm_flag:
             head = F.normalize(head, 2, -1)
             rel = F.normalize(rel, 2, -1)
@@ -279,8 +288,8 @@ class TransE(nn.Module):
         else:
             score = (head + rel) - tail
         score = torch.norm(score, self.p_norm, -1).flatten()
-        pos_score = self._get_positive_score(score, head.shape[0] // 2)
-        neg_score = self._get_negative_score(score, head.shape[0] // 2)
+        pos_score = self._get_positive_score(score, pos_num)
+        neg_score = self._get_negative_score(score, pos_num)
         return pos_score, neg_score
     
     def _get_positive_score(self, score, num_pos_samples):
