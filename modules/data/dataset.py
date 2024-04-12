@@ -94,6 +94,7 @@ class KGRecDataset(torch_geometric.data.Dataset):
     def num_nodes(self):
         return self.get(0).num_nodes
 
+    @property
     def get_struc_dataset(self):
         return self.struc_dataset
     
@@ -206,12 +207,13 @@ class RecTrainDataset(torch.utils.data.Dataset):
         self.trainset = pd.read_csv(os.path.join(self._data_dir, 'train.csv'))
         self.validset = pd.read_csv(os.path.join(self._data_dir, 'valid.csv'))
         self.testset = pd.read_csv(os.path.join(self._data_dir, 'test.csv'))
-        self.wrapped_valid_set = self.__build_test_rp(self.validset)
-        self.wrapped_test_set = self.__build_test_rp(self.testset)
 
         self.ent2id = json.load(open(os.path.join(self._data_dir, 'entity2id.json')))
         self.rel2id = json.load(open(os.path.join(self._data_dir, 'relation2id.json')))
 
+        self.wrapped_valid_set = self.__build_test_rp(self.validset)
+        self.wrapped_test_set = self.__build_test_rp(self.testset)
+        
         self._sampler = PairwiseSampler(self.name, self.data, self.ent2id, self.rel2id)
         self.norm_adj = sp_mat_to_sp_tensor(self._create_adj())
 
@@ -275,8 +277,8 @@ class RecTrainDataset(torch.utils.data.Dataset):
         test_data = defaultdict(list)
 
         for i in range(len(dataset)):
-            user = dataset.iloc[i][data_config[self.name]['user']]
-            item = dataset.iloc[i][data_config[self.name]['item']]
+            user = self.ent2id[dataset.iloc[i][data_config[self.name]['user']]]
+            item = self.ent2id[dataset.iloc[i][data_config[self.name]['item']]]
             test_data[user].append(item)
         
         return test_data
@@ -289,7 +291,6 @@ class RecTrainDataset(torch.utils.data.Dataset):
         else:
             raise ValueError('Invalid mode. Please choose from "valid" or "test".')
 
-
 class Sampler(object):
     """Base class for all sampler to sample negative items.
     """
@@ -301,7 +302,6 @@ class Sampler(object):
 
     def __iter__(self):
         raise NotImplementedError
-
 
 class PairwiseSampler(Sampler):
     '''
@@ -414,25 +414,19 @@ class NegativeSampler(Sampler):
     def Triples_neg_sample(self, edge_index, edge_type):
         batch_h, batch_t, batch_r = edge_index[0], edge_index[1], edge_type
 		#len_triples = batch_h.__len__()
-        batch_data = {}
-        if self.sampling_mode == "normal":
-            batch_data['mode'] = "normal"
-            batch_h_sample = np.repeat(batch_h.view(-1, 1).cpu().numpy(), 1 + self.neg_ent, axis = -1)
-            batch_t_sample = np.repeat(batch_t.view(-1, 1).cpu().numpy(), 1 + self.neg_ent, axis = -1)
-            batch_r_sample = np.repeat(batch_r.view(-1, 1).cpu().numpy(), 1 + self.neg_ent, axis = -1)
-            for idx, (h, t, r) in enumerate(zip(batch_h, batch_t, batch_r)):
-                last = 1
-                if self.neg_ent > 0:
-                    neg_head, neg_tail = self.__triples_normal_batch(h, t, r, self.neg_ent)
-                    if len(neg_head) > 0:
-                        batch_h_sample[idx][last:last + len(neg_head)] = neg_head
-                        last += len(neg_head)
-                    if len(neg_tail) > 0:
-                        batch_t_sample[idx][last:last + len(neg_tail)] = neg_tail
-                        last += len(neg_tail)
-            batch_h = batch_h_sample.transpose()
-            batch_t = batch_t_sample.transpose()
-            batch_r = batch_r_sample.transpose()
+        batch_h_sample = np.repeat(batch_h.view(-1, 1).cpu().numpy(), 1 + self.neg_size, axis = -1)
+        batch_t_sample = np.repeat(batch_t.view(-1, 1).cpu().numpy(), 1 + self.neg_size, axis = -1)
+        batch_r_sample = np.repeat(batch_r.view(-1, 1).cpu().numpy(), 1 + self.neg_size, axis = -1)
+        for idx, (h, t, r) in enumerate(zip(batch_h, batch_t, batch_r)):
+            last = 1
+            if self.neg_size > 0:
+                neg_tail = self.__triples_normal_batch(h, t, r, self.neg_size)
+                if len(neg_tail) > 0:
+                    batch_t_sample[idx][last:last + len(neg_tail)] = neg_tail
+                    last += len(neg_tail)
+        batch_h = batch_h_sample.transpose()
+        batch_t = batch_t_sample.transpose()
+        batch_r = batch_r_sample.transpose()
 
         expand_edge_index = torch.tensor(np.array([batch_h.squeeze().flatten(), batch_t.squeeze().flatten()]), dtype=torch.int32)
         expand_edge_type = torch.tensor(batch_r.squeeze().flatten(), dtype=torch.int32)
@@ -451,7 +445,7 @@ class NegativeSampler(Sampler):
         return neg_list_t[:neg_size]
     
     def __triples_corrupt_tail(self, h, r, num_max = 1):
-        tmp = torch.tensor(random.sample(len(self.ent2id), k=num_max))
+        tmp = torch.tensor(random.sample(range(len(self.e2id)), k=num_max))
         h_index, r_index= h.item(), r.item()
         mask = np.in1d(tmp, self.t_of_hr[(h_index, r_index)], assume_unique=True, invert=True)
         neg = tmp[mask]

@@ -1,12 +1,12 @@
-cuda: 3
+cuda: 7
 data:
       name: 'AmazonBookTiny'
 ### Training
 seed: 42
 learning_rate : 0.01
-epoch: 1
+epoch: 3
 start_epoch : 0
-batch_size: 128
+batch_size: 64
 
 ### Model Setting
 kg_neg_size: 100
@@ -17,7 +17,7 @@ hidden_embedding_dim : 400
 isPretrain: 0
 n_layers_lightgcn: 3
 loss_kge_weight : 0.5
-loss_reg_weight : 0.01
+loss_reg_weight : 0.001
 
 ### Evaluation
 topks : [10, 20, 50]

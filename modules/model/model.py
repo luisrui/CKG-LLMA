@@ -167,14 +167,14 @@ class Model(BasicModel):
         self.ui_embeddings = nn.Embedding(num_embeddings=self.num_users + self.num_items, embedding_dim=args['embedding_dim'])
         self.ent_embeddings_llm = nn.Embedding(num_embeddings=len(ent2id), embedding_dim=args['embedding_dim'])
         self.rel_embeddings = nn.Embedding(num_embeddings=len(rel2id), embedding_dim=args['embedding_dim'])
-        #self.rel_embedding = nn.Parameter(torch.empty(1, args['embedding_dim']))
-        if args['isPretrain'] == 0:
-            nn.init.normal_(self.ent_embeddings.weight, std=0.1)
-            nn.init.normal_(self.rel_embedding, std=0.1)
-        else:
-            self.ent_embeddings.weight.data.copy_(torch.from_numpy(self.config['user_emb']))
-            self.rel_embeddings.weight.data.copy_(torch.from_numpy(self.config['item_emb']))
-            print('use pretarined data')
+        
+        # if args['isPretrain'] == 0:
+        #     nn.init.normal_(self.ent_embeddings.weight, std=0.1)
+        #     nn.init.normal_(self.rel_embedding, std=0.1)
+        # else:
+        #     self.ent_embeddings.weight.data.copy_(torch.from_numpy(self.config['user_emb']))
+        #     self.rel_embeddings.weight.data.copy_(torch.from_numpy(self.config['item_emb']))
+        #     print('use pretarined data')
 
         self.norm_adj = norm_adj.to(device)
 
@@ -186,13 +186,16 @@ class Model(BasicModel):
         self.act_func = nn.LeakyReLU(negative_slope=0.2)
         self.remap_layer = nn.Linear(args['embedding_dim'] * 3, args['embedding_dim'])
         
+        #### Evaluation
+        self.rate_act_fn = nn.Sigmoid()
+        
     def forward(self, edge_indexs, edge_types, users, items, neg_items):
-        ### KG Embedding Learning(only training the ent_embeddings)
+        ### KG Embedding Learning(only training the ent_embeddings_kge, and rel_embeddings)
         x_list = []
         for edge_index, edge_type in zip(edge_indexs, edge_types):
             edge_index = edge_index.to(self.device)
             edge_type = edge_type.to(self.device)
-            x = self.conv_gcn1(self.ent_embeddings.weight, edge_index, edge_type)
+            x = self.conv_gcn1(self.ent_embeddings_kge.weight, edge_index, edge_type)
             x = self.act_func(x)
             x = self.conv_gcn2(x, edge_index, edge_type)
             x_list.append(x)
@@ -216,7 +219,7 @@ class Model(BasicModel):
         kge_loss = self.KGEloss(pos_score, neg_score)
 
         ### Rate Prediction Training(only training the ui_embeddings)
-        user_embeddings, item_embeddings = self._forward_lightgcn(self.norm_adj)
+        user_embeddings, item_embeddings = self._forward_lightgcn(self.norm_adj, self.ui_embeddings.weight)
 
         user_embs = F.embedding(users, user_embeddings)
         item_embs = F.embedding(items - self.num_users, item_embeddings)
@@ -238,11 +241,11 @@ class Model(BasicModel):
         total_loss = bpr_loss + self.reg_weight * reg_loss + self.kge_weight * kge_loss
         return total_loss, bpr_loss, kge_loss
  
-    def _forward_lightgcn(self, norm_adj):
+    def _forward_lightgcn(self, norm_adj, ego_embeddings):
         '''
         Forward pass of LightGCN(Learning the ui embeddings)
         '''
-        all_embeddings = [self.ui_embeddings.weight]
+        all_embeddings = [ego_embeddings]
 
         for k in range(self.n_layers):
             if isinstance(norm_adj, list):
@@ -259,7 +262,7 @@ class Model(BasicModel):
     def getUsersRating(self, users):
         users_emb = self.ui_embeddings(users)
         items_emb = self.ui_embeddings.weight[self.num_users:]
-        rating = nn.Sigmoid(torch.matmul(users_emb, items_emb.T))
+        rating = self.rate_act_fn(torch.matmul(users_emb, items_emb.T))
         return rating
 
 class TransE(nn.Module):

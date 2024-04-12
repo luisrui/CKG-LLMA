@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from ..data import Recdataset, KGRecDataset
+from ..data import RecTrainDataset, KGRecDataset, data_config
 from ..utils import *
 
 def test_one_batch(args, X):
@@ -17,14 +17,14 @@ def test_one_batch(args, X):
             'precision':np.array(pre), 
             'ndcg':np.array(ndcg)}
 
-def Test(args, recdataset : Recdataset, kg : KGRecDataset, model, mode : dict, device):
+def Test(args, recdataset : RecTrainDataset, kg : KGRecDataset, model, mode : dict, device):
     u_batch_size = args['test_u_batch_size']
     model.eval()
     testset = recdataset.get_wrapped_set(mode)
     results = {'precision': np.zeros(len(args['topks'])),
                'recall': np.zeros(len(args['topks'])),
                'ndcg': np.zeros(len(args['topks']))}
-    max_K = max()
+    max_K = max(args['topks'])
     with torch.no_grad():
         users = list(testset.keys())
         users_list, rating_list, groundTrue_list = [], [], []
@@ -40,7 +40,7 @@ def Test(args, recdataset : Recdataset, kg : KGRecDataset, model, mode : dict, d
             exclude_index, exclude_items = [], []
             for range_i, items in enumerate(allPos):
                 exclude_index.extend([range_i] * len(items))
-                exclude_items.extend(items)
+                exclude_items.extend(np.array(items) - data_config[args["data"]["name"]]['num_users'])
             rating[exclude_index, exclude_items] = -(1<<10)
             _, rating_K = torch.topk(rating, k=max_K)
             rating = rating.cpu().numpy()
