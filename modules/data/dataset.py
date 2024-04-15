@@ -43,7 +43,7 @@ data_config = {
 }
 class KGRecDataset(torch_geometric.data.Dataset):
     '''
-    The dataset constructs graph nodes for background knowledge search and subgraph sampler.
+    The dataset constructs graph nodes for background knowledge search and subgraph sampler. 'self.u_of_i' is for training, and 'self.u_of_i_all' is for all training, valid, and test. It servers for sampling.
     '''
     def __init__(self, args, transform = None, pre_transform = None):
         
@@ -57,8 +57,8 @@ class KGRecDataset(torch_geometric.data.Dataset):
         self.num_user = data_config[self.name]['num_users']
         self.num_items = data_config[self.name]['num_items']
 
-        self.i_of_u = defaultdict(list) ## item-user with Liked relation
-        self.u_of_i = defaultdict(list) ## user-item with Liked relation
+        #self.i_of_u = defaultdict(list) ## item-user with Liked relation
+        self.u_of_i_all = defaultdict(list) ## user-item with Liked relation
         self.u_of_u = defaultdict(list) ## user-user with Co-liked relation
         self.i_of_a = defaultdict(list) ## item-attribute with Has attr relations
         self.i_of_i = defaultdict(list) ## item-item with Co-attr relations
@@ -76,11 +76,11 @@ class KGRecDataset(torch_geometric.data.Dataset):
         return len(self.trainset)
     
     def _load_adj(self):
-        self.u_of_i = torch.load(f'./dataset/{self.name}/pre_saved/u_of_i.pt')
+        self.u_of_i_all = torch.load(f'./dataset/{self.name}/pre_saved/u_of_i_all.pt')
         self.u_of_u = torch.load(f'./dataset/{self.name}/pre_saved/u_of_u.pt')
         self.i_of_i = torch.load(f'./dataset/{self.name}/pre_saved/i_of_i.pt')
         self.i_of_a = torch.load(f'./dataset/{self.name}/pre_saved/i_of_a.pt')
-        self.i_of_u = torch.load(f'./dataset/{self.name}/pre_saved/i_of_u.pt')
+        #self.i_of_u = torch.load(f'./dataset/{self.name}/pre_saved/i_of_u.pt')
 
     @property
     def raw_file_names(self):
@@ -121,9 +121,9 @@ class KGRecDataset(torch_geometric.data.Dataset):
         liked_mask = (edge_type == self.rel2id['liked']) & (edge_index[0] < self.num_user) & \
             (self.num_user <= edge_index[1]) & (edge_index[1] < self.num_user + self.num_items)
         user_item[edge_index[0][liked_mask], edge_index[1][liked_mask] - self.num_user] = True
-        self.u_of_i = {u: (np.flatnonzero(row) + self.num_user).tolist() for u, row in enumerate(user_item.numpy())}
-        item_user[edge_index[1][liked_mask] - self.num_user, edge_index[0][liked_mask]] = True
-        self.i_of_u = {i + self.num_user: np.flatnonzero(row).tolist() for i, row in enumerate(item_user.numpy())}
+        self.u_of_i_all = {u: (np.flatnonzero(row) + self.num_user).tolist() for u, row in enumerate(user_item.numpy())}
+        # item_user[edge_index[1][liked_mask] - self.num_user, edge_index[0][liked_mask]] = True
+        # self.i_of_u = {i + self.num_user: np.flatnonzero(row).tolist() for i, row in enumerate(item_user.numpy())}
 
         ## Build self.u_of_u
         print('Building user-user relations...')
@@ -156,8 +156,8 @@ class KGRecDataset(torch_geometric.data.Dataset):
         os.makedirs(f'./dataset/{self.name}/pre_saved/', exist_ok=True)
         torch.save(self.u_of_u, f'./dataset/{self.name}/pre_saved/u_of_u.pt')
         torch.save(self.i_of_i, f'./dataset/{self.name}/pre_saved/i_of_i.pt') 
-        torch.save(self.u_of_i, f'./dataset/{self.name}/pre_saved/u_of_i.pt')
-        torch.save(self.i_of_u, f'./dataset/{self.name}/pre_saved/i_of_u.pt')
+        torch.save(self.u_of_i_all, f'./dataset/{self.name}/pre_saved/u_of_i_all.pt')
+        #torch.save(self.i_of_u, f'./dataset/{self.name}/pre_saved/i_of_u.pt')
         torch.save(self.i_of_a, f'./dataset/{self.name}/pre_saved/i_of_a.pt')
     
     def len(self):
@@ -166,32 +166,6 @@ class KGRecDataset(torch_geometric.data.Dataset):
     def get(self, idx):
         data = torch.load(os.path.join(self.processed_dir, self.processed_file_names[idx]))[0]
         return data
-    
-    def _gen_adj(self):
-        edge_index = self.struc_dataset.edge_index
-        edge_type = self.struc_dataset.edge_type
-        
-        ## Build self.u_of_i and self.i_of_u
-        print('Building user-item and item-user relations...')
-        user_item = torch.zeros((self.num_user, self.num_items), dtype=torch.bool)
-        item_user = torch.zeros((self.num_items, self.num_user), dtype=torch.bool)
-        liked_mask = (edge_type == self.rel2id['liked']) & (edge_index[0] < self.num_user) & \
-            (self.num_user <= edge_index[1]) & (edge_index[1] < self.num_user + self.num_items)
-        user_item[edge_index[0][liked_mask], edge_index[1][liked_mask] - self.num_user] = True
-        self.u_of_i = {u: (np.flatnonzero(row) + self.num_user).tolist() for u, row in enumerate(user_item.numpy())}
-        item_user[edge_index[1][liked_mask] - self.num_user, edge_index[0][liked_mask]] = True
-        self.i_of_u = {i + self.num_user: np.flatnonzero(row).tolist() for i, row in enumerate(item_user.numpy())}
-
-        os.makedirs(f'./dataset/{self.name}/pre_saved/', exist_ok=True)
-        #torch.save(self.u_of_u, f'./dataset/{self.name}/pre_saved/u_of_u.pt')
-        #torch.save(self.i_of_i, f'./dataset/{self.name}/pre_saved/i_of_i.pt') 
-        #torch.save(self.u_of_i, f'./dataset/{self.name}/pre_saved/u_of_i.pt')
-        torch.save(self.i_of_u, f'./dataset/{self.name}/pre_saved/i_of_u.pt')
-        #torch.save(self.i_of_a, f'./dataset/{self.name}/pre_saved/i_of_a.pt')
-
-    def get_all_pos(self, users):
-        posItems = [self.u_of_i[user] for user in users]
-        return posItems
 
 class RecTrainDataset(torch.utils.data.Dataset):
     '''
@@ -210,6 +184,12 @@ class RecTrainDataset(torch.utils.data.Dataset):
 
         self.ent2id = json.load(open(os.path.join(self._data_dir, 'entity2id.json')))
         self.rel2id = json.load(open(os.path.join(self._data_dir, 'relation2id.json')))
+
+        self.u_of_i = defaultdict(list)
+        if os.path.exists(f'./dataset/{self.name}/pre_saved/u_of_i.pt'):
+            self.u_of_i = torch.load(f'./dataset/{self.name}/pre_saved/u_of_i.pt')
+        else:
+            self.u_of_i = self._create_u_of_i()
 
         self.wrapped_valid_set = self.__build_test_rp(self.validset)
         self.wrapped_test_set = self.__build_test_rp(self.testset)
@@ -247,6 +227,14 @@ class RecTrainDataset(torch.utils.data.Dataset):
         negItems = torch.Tensor(S[:, 2]).long()
         return negItems
     
+    def _create_u_of_i(self):
+        for user, item in zip(self.trainset[data_config[self.name]['user']], self.trainset[data_config[self.name]['item']]):
+            user_id = self.ent2id[user]
+            item_id = self.ent2id[item]
+            self.u_of_i[user_id].append(item_id)
+
+        torch.save(self.u_of_i, f'./dataset/{self.name}/pre_saved/u_of_i.pt')
+
     def _create_adj(self):
         nodes_num = self.num_users + self.num_items
         users_np = np.array([
@@ -290,6 +278,10 @@ class RecTrainDataset(torch.utils.data.Dataset):
             return self.wrapped_test_set
         else:
             raise ValueError('Invalid mode. Please choose from "valid" or "test".')
+    
+    def get_all_pos(self, users):
+        posItems = [self.u_of_i[user] for user in users]
+        return posItems
 
 class Sampler(object):
     """Base class for all sampler to sample negative items.
@@ -326,7 +318,7 @@ class PairwiseSampler(Sampler):
         self.num_item = data_config[self.name]['num_items']
         self.num_neg = num_neg
 
-        self.u_of_i = defaultdict(list)
+        self.u_of_i_all = defaultdict(list)
         #self.i_of_u = defaultdict(list)
         if os.path.exists(f'./dataset/{name}/pre_saved/'):
             self._load_uoi()
@@ -334,26 +326,26 @@ class PairwiseSampler(Sampler):
             self._count_uoi(dataset[data_config[self.name]['user']], dataset[data_config[self.name]['item']])
     
     def _load_uoi(self):
-        self.u_of_i = torch.load(f'./dataset/{self.name}/pre_saved/u_of_i.pt')
+        self.u_of_i_all = torch.load(f'./dataset/{self.name}/pre_saved/u_of_i_all.pt')
 
     def _count_uoi(self, users, items):
         for u, i in zip(users, items):
             u_id = self.e2id[u]
             i_id = self.e2id[i]
-            self.u_of_i[u_id].append(i_id)
+            self.u_of_i_all[u_id].append(i_id)
 
-        for u in self.u_of_i.keys():
-            self.u_of_i[u] = np.array(list(set(self.u_of_i[u])))
+        for u in self.u_of_i_all.keys():
+            self.u_of_i_all[u] = np.array(list(set(self.u_of_i_all[u])))
         
         os.makedirs(f'./dataset/{self.name}/pre_saved/', exist_ok=True)
-        torch.save(self.u_of_i, f'./dataset/{self.name}/pre_saved/u_of_i.pt')
+        torch.save(self.u_of_i_all, f'./dataset/{self.name}/pre_saved/u_of_i_all.pt')
     
     def UniformSample_original(self, seed, users, items):
         if sample_ext:
             SampleFunction.seed(seed)
             # users = np.asarray(users, dtype=np.int32)
             # items = np.asarray(items, dtype=np.int32)
-            S = SampleFunction.sample_negative(users, items, self.u_of_i, self.num_user, self.num_item)
+            S = SampleFunction.sample_negative(users, items, self.u_of_i_all, self.num_user, self.num_item)
         else:
             S = self._uniformSample_original_python(users, items)
         return S
@@ -367,7 +359,7 @@ class PairwiseSampler(Sampler):
         S = []
         for idx, (user, positem) in enumerate(zip(users, items)):
             user = user.item()
-            posForUser = self.u_of_i[user]
+            posForUser = self.u_of_i_all[user]
             while True:
                 negitem = np.random.randint(self.num_user, self.num_user + self.num_item)
                 if negitem in posForUser:

@@ -6,14 +6,14 @@ from tqdm import tqdm
 import os
 import numpy as np
 
-from .dataset import KGRecDataset
+from .dataset import KGRecDataset, RecTrainDataset
 
 class Extractor():
     '''
     Extracting subgraphs based on one-hop neighbours. When the core node is user, there should be two subgraphs:(user->user, user->item); when the core node is item, 
     there should be two subgraphs:(item->item, item->user). The total number of graphs of one pair of (user, item) should be 4.
     '''
-    def __init__(self, args : dict, num_user : int, num_items : int, ent2id : list, rel2id : list, srcKG : KGRecDataset):
+    def __init__(self, args : dict, num_user : int, num_items : int, ent2id : list, rel2id : list, srcKG : KGRecDataset, recData: RecTrainDataset):
 
         print('Initializing Subgraph Extractor...')
         self.max_neighbors = args['max_sample_neighbors']
@@ -28,78 +28,12 @@ class Extractor():
         self.num_user = num_user
         self.num_items = num_items
         
-        self.u_of_i = srcKG.u_of_i
+        self.u_of_i = recData.u_of_i
         self.u_of_u = srcKG.u_of_u
         self.i_of_i = srcKG.i_of_i
         self.i_of_a = srcKG.i_of_a
         self.i_of_u = srcKG.i_of_u
 
-    # def sample_subgraph(self, aug_types : list, batch_users : torch.Tensor, batch_items : torch.Tensor):
-    #     '''
-    #     Extract subgraphs based on the given types. Subgraphs are constructed based on their triples.
-    #     '''
-    #     target_types = ['uu', 'ui', 'iu', 'ii']
-    #     subgraph_uus, subgraph_uis, subgraph_ius, subgraph_iis = [], [], [], []
-
-    #     user_item_pairs = np.array(np.meshgrid(batch_users, batch_items)).T.reshape(-1, 2)
-
-    #     for aug_tupe in aug_types:
-    #         if aug_tupe not in target_types:
-    #             raise ValueError(f'Invalid type {aug_tupe} for subgraph extraction')
-
-    #         if aug_tupe == 'uu':
-    #             for user, _ in user_item_pairs:
-    #                 user_neighbors = self.u_of_u[user]
-    #                 sampled_nbrs = np.random.choice(user_neighbors, size=min(len(user_neighbors), self.max_neighbors), replace=False)
-    #                 subgraph_uu = [[user, self.rel2id['co-liked'], co_usr] for co_usr in sampled_nbrs]
-    #                 for co_usr in sampled_nbrs:
-    #                     common_liked_items = list(set(self.u_of_i[user]) & set(self.u_of_i[co_usr]))
-    #                     if common_liked_items:
-    #                         co_item = np.random.choice(common_liked_items)
-    #                         subgraph_uu.append([user, self.rel2id['liked'], co_item])
-    #                         subgraph_uu.extend([[co_item, r, t] for r, t in self.i_of_a[co_item]])
-    #                 subgraph_uus.append(subgraph_uu)
-
-    #         if aug_tupe == 'ui':
-    #             for user, item in user_item_pairs:
-    #                 subgraph_ui = [[user, self.rel2id['liked'], item]]
-    #                 subgraph_ui.extend([[item, r, t] for r, t in self.i_of_a[item]])
-    #                 item_neighbors = self.u_of_i[item]
-    #                 if len(item_neighbors) >= self.max_neighbors:
-    #                     sampled_nbrs = np.random.choice(item_neighbors, size=self.max_neighbors, replace=False)
-    #                     subgraph_ui.extend([[user, self.rel2id['liked'], co_item] for co_item in sampled_nbrs])
-    #                 else:
-    #                     subgraph_ui.extend([[user, self.rel2id['liked'], co_item] for co_item in item_neighbors])
-    #                 subgraph_uis.append(subgraph_ui)
-
-    #         if aug_tupe == 'ii':
-    #             for _, item in user_item_pairs:
-    #                 rel_nbritems = self.i_of_i[item]
-    #                 subgraph_ii = [[item, r, t] for r, t in self.i_of_a[item]]
-    #                 if len(rel_nbritems) >= self.max_neighbors:
-    #                     sampled_nbrs = np.random.choice(rel_nbritems, size=self.max_neighbors, replace=False)
-    #                     subgraph_ii.extend([[item, rel, co_item] for rel, co_item in sampled_nbrs])
-    #                     for rel, co_item in sampled_nbrs:
-    #                         subgraph_ii.extend([[co_item, r, t] for r, t in self.i_of_a[co_item]])
-    #                 else:
-    #                     subgraph_ii.extend([[item, rel, co_item] for rel, co_item in rel_nbritems])
-    #                     for rel, co_item in rel_nbritems:
-    #                         subgraph_ii.extend([[co_item, r, t] for r, t in self.i_of_a[co_item]])
-    #                 subgraph_iis.append(subgraph_ii)
-
-    #         if aug_tupe == 'iu':
-    #             for user, item in user_item_pairs:
-    #                 user_neighbors = self.i_of_u[user]
-    #                 subgraph_iu = [[item, r, t] for r, t in self.i_of_a[item]]
-    #                 if len(user_neighbors) >= self.max_neighbors:
-    #                     nbr_users = np.random.choice(user_neighbors, size=self.max_neighbors, replace=False)
-    #                     subgraph_iu.extend([[co_user, self.rel2id['liked'], item] for co_user in nbr_users])
-    #                 else:
-    #                     subgraph_iu.extend([[co_user, self.rel2id['liked'], item] for co_user in user_neighbors])
-    #                 subgraph_ius.append(subgraph_iu)
-
-    #     return [subgraph_uus, subgraph_uis, subgraph_ius, subgraph_iis]
-    
     def sample_subgraph(self, 
                         aug_types : list, 
                         batch_users: torch.Tensor, 

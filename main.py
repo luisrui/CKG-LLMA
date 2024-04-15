@@ -23,7 +23,8 @@ if __name__ == '__main__':
                         num_items=data_config[args["data"]["name"]]['num_users'], 
                         ent2id=rec_data.ent2id, 
                         rel2id=rec_data.rel2id, 
-                        srcKG=kg_data)
+                        srcKG=kg_data,
+                        recData=rec_data)
 
     kg_data_loader = torch.utils.data.DataLoader(rec_data, batch_size=args['batch_size'], shuffle=True, num_workers=args['dataloader_n_workers'])
 

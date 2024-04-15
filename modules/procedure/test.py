@@ -17,7 +17,7 @@ def test_one_batch(args, X):
             'precision':np.array(pre), 
             'ndcg':np.array(ndcg)}
 
-def Test(args, recdataset : RecTrainDataset, kg : KGRecDataset, model, mode : dict, device):
+def Test(args, recdataset : RecTrainDataset, model, mode : dict, device):
     u_batch_size = args['test_u_batch_size']
     model.eval()
     testset = recdataset.get_wrapped_set(mode)
@@ -31,7 +31,7 @@ def Test(args, recdataset : RecTrainDataset, kg : KGRecDataset, model, mode : di
         total_batch = len(users) // u_batch_size + 1
 
         for batch_users in utils.minibatch(users, batch_size=u_batch_size):
-            allPos = kg.get_all_pos(batch_users)
+            allPos = recdataset.get_all_pos(batch_users)
             groundTrue = [testset[u] for u in batch_users]
             batch_users_gpu = torch.Tensor(batch_users).long()
             batch_users_gpu = batch_users_gpu.to(device)
