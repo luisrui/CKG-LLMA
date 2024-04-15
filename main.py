@@ -1,7 +1,7 @@
 from modules.data import *
 from modules.utils import *
 from modules.model import *
-from modules.procedure import Test, Train
+from modules.procedure import *
 
 from collections import deque
 from tqdm import trange
@@ -27,16 +27,23 @@ if __name__ == '__main__':
 
     kg_data_loader = torch.utils.data.DataLoader(rec_data, batch_size=args['batch_size'], shuffle=True, num_workers=args['dataloader_n_workers'])
 
-    model = Model(args=args, 
-                  norm_adj=rec_data.get_norm_adj, 
-                  kg=kg_data.get_struc_dataset, 
-                  ent2id=rec_data.ent2id, 
-                  rel2id=rec_data.rel2id, 
-                  device=device)
+    # model = Model(args=args, 
+    #               norm_adj=rec_data.get_norm_adj, 
+    #               kg=kg_data.get_struc_dataset, 
+    #               ent2id=rec_data.ent2id, 
+    #               rel2id=rec_data.rel2id, 
+    #               device=device)
+    model = LightGCN(num_users=data_config[args["data"]["name"]]['num_users'],
+                    num_items=data_config[args["data"]["name"]]['num_items'],
+                    embed_dim=args['embedding_dim'],
+                    norm_adj=rec_data.get_norm_adj.to(device),
+                    n_layers=args['n_layers_lightgcn'],
+                    batch_size=args['batch_size'])
     model = model.to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args['learning_rate'])
 
-    #Train(args, model, kg_data_loader, rec_data, extractor, optimizer, device)
-    result = Test(args, rec_data, kg_data, model, 'valid', device)
+    #Train(args, model, kg_data_loader, rec_data, kg_data, extractor, optimizer, device)
+    TrainLightGCN(args, model, kg_data_loader, rec_data, kg_data, extractor, optimizer, device)
+    result = Test(args, rec_data, kg_data, model, 'test', device)
 

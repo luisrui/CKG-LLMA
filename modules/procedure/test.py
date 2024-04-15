@@ -63,5 +63,8 @@ def Test(args, recdataset : RecTrainDataset, kg : KGRecDataset, model, mode : di
         results['precision'] /= float(len(users))
         results['ndcg'] /= float(len(users))
 
-        print(results)
+        print("Results:")
+        print(f"Precision: {results['precision']:.3f}")
+        print(f"Recall: {results['recall']:.3f}")
+        print(f"NDCG: {results['ndcg']:.3f}")
         return results
