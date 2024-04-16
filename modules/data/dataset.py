@@ -39,6 +39,13 @@ data_config = {
     'Yelp' : {
         'user' : 'xxx',
         'item' : 'xx'
+    },
+    'MovieLens1M' : {
+        'user' : 'User',
+        'item' : 'Item', 
+        'review' : 'Review',
+        'num_users' : 943,
+        'num_items' : 1675,
     }
 }
 class KGRecDataset(torch_geometric.data.Dataset):
@@ -62,6 +69,7 @@ class KGRecDataset(torch_geometric.data.Dataset):
         self.u_of_u = defaultdict(list) ## user-user with Co-liked relation
         self.i_of_a = defaultdict(list) ## item-attribute with Has attr relations
         self.i_of_i = defaultdict(list) ## item-item with Co-attr relations
+        self.t_of_hr = defaultdict(list) ## tail_2_head_relation triples
 
         super(KGRecDataset, self).__init__(self._data_dir, transform, pre_transform)
 
@@ -80,6 +88,7 @@ class KGRecDataset(torch_geometric.data.Dataset):
         self.u_of_u = torch.load(f'./dataset/{self.name}/pre_saved/u_of_u.pt')
         self.i_of_i = torch.load(f'./dataset/{self.name}/pre_saved/i_of_i.pt')
         self.i_of_a = torch.load(f'./dataset/{self.name}/pre_saved/i_of_a.pt')
+        self.t_of_hr = torch.load(f'./dataset/{self.name}/pre_saved/t_of_hr.pt')
         #self.i_of_u = torch.load(f'./dataset/{self.name}/pre_saved/i_of_u.pt')
 
     @property
@@ -152,13 +161,19 @@ class KGRecDataset(torch_geometric.data.Dataset):
             h, t, r = target_items[i], target_attrs[i], target_rels[i]
             self.i_of_a[h].append((r, t))
         # self.i_of_a = {i: [(i, r, t) for i, r, t in zip(edge_index[0][attr_mask], edge_type[attr_mask], edge_index[1][attr_mask]) if i == i] for i in range(self.num_user, self.num_user+self.num_items)}
-            
+        
+        ## build self.t_of_hr
+        print('Building tail_2_head_relation triples...')
+        for (h, t), r in zip(edge_index.t().tolist(), edge_type.tolist()):
+            self.t_of_hr[(h, r)].append(t)
+
         os.makedirs(f'./dataset/{self.name}/pre_saved/', exist_ok=True)
         torch.save(self.u_of_u, f'./dataset/{self.name}/pre_saved/u_of_u.pt')
         torch.save(self.i_of_i, f'./dataset/{self.name}/pre_saved/i_of_i.pt') 
         torch.save(self.u_of_i_all, f'./dataset/{self.name}/pre_saved/u_of_i_all.pt')
         #torch.save(self.i_of_u, f'./dataset/{self.name}/pre_saved/i_of_u.pt')
         torch.save(self.i_of_a, f'./dataset/{self.name}/pre_saved/i_of_a.pt')
+        torch.save(self.t_of_hr, f'./dataset/{self.name}/pre_saved/t_of_hr.pt')
     
     def len(self):
         return len(self.processed_file_names)
@@ -177,7 +192,6 @@ class RecTrainDataset(torch.utils.data.Dataset):
         self.seed = args['seed']
 
         self._data_dir = f'./dataset/{self.name}/'
-        self.data = pd.read_csv(os.path.join(self._data_dir, 'data_all.csv'))
         self.trainset = pd.read_csv(os.path.join(self._data_dir, 'train.csv'))
         self.validset = pd.read_csv(os.path.join(self._data_dir, 'valid.csv'))
         self.testset = pd.read_csv(os.path.join(self._data_dir, 'test.csv'))
@@ -194,7 +208,7 @@ class RecTrainDataset(torch.utils.data.Dataset):
         self.wrapped_valid_set = self.__build_test_rp(self.validset)
         self.wrapped_test_set = self.__build_test_rp(self.testset)
         
-        self._sampler = PairwiseSampler(self.name, self.data, self.ent2id, self.rel2id)
+        self._sampler = PairwiseSampler(self.name, self.ent2id, self.rel2id)
         self.norm_adj = sp_mat_to_sp_tensor(self._create_adj())
 
     @property
@@ -301,7 +315,6 @@ class PairwiseSampler(Sampler):
     '''
     def __init__(self, 
                  name : str,
-                 dataset:pd.DataFrame, 
                  ent2id:dict, 
                  rel2id:dict, 
                  num_neg:int = 1
@@ -320,26 +333,11 @@ class PairwiseSampler(Sampler):
 
         self.u_of_i_all = defaultdict(list)
         #self.i_of_u = defaultdict(list)
-        if os.path.exists(f'./dataset/{name}/pre_saved/'):
-            self._load_uoi()
-        else:
-            self._count_uoi(dataset[data_config[self.name]['user']], dataset[data_config[self.name]['item']])
+        self._load_uoi()
     
     def _load_uoi(self):
         self.u_of_i_all = torch.load(f'./dataset/{self.name}/pre_saved/u_of_i_all.pt')
 
-    def _count_uoi(self, users, items):
-        for u, i in zip(users, items):
-            u_id = self.e2id[u]
-            i_id = self.e2id[i]
-            self.u_of_i_all[u_id].append(i_id)
-
-        for u in self.u_of_i_all.keys():
-            self.u_of_i_all[u] = np.array(list(set(self.u_of_i_all[u])))
-        
-        os.makedirs(f'./dataset/{self.name}/pre_saved/', exist_ok=True)
-        torch.save(self.u_of_i_all, f'./dataset/{self.name}/pre_saved/u_of_i_all.pt')
-    
     def UniformSample_original(self, seed, users, items):
         if sample_ext:
             SampleFunction.seed(seed)
@@ -388,20 +386,10 @@ class NegativeSampler(Sampler):
         self.neg_size = neg_size
 
         self.t_of_hr = defaultdict(list)
-        if os.path.exists(f'./dataset/{name}/pre_saved/t_of_hr.pt'):
-            self._load_hr()
-        else:
-            self._count_hr()
+        self._load_hr()
 
     def _load_hr(self):
         self.t_of_hr = torch.load(f'./dataset/{self.name}/pre_saved/t_of_hr.pt')
-
-    def _count_hr(self):
-        for (h, t), r in zip(self.kg.edge_index.t().tolist(), self.kg.edge_type.tolist()):
-            self.t_of_hr[(h, r)].append(t)
-        
-        os.makedirs(f'./dataset/{self.name}/pre_saved/', exist_ok=True)
-        torch.save(self.t_of_hr, f'./dataset/{self.name}/pre_saved/t_of_hr.pt')
  
     def Triples_neg_sample(self, edge_index, edge_type):
         batch_h, batch_t, batch_r = edge_index[0], edge_index[1], edge_type
