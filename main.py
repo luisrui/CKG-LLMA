@@ -3,10 +3,13 @@ from modules.utils import *
 from modules.model import *
 from modules.procedure import *
 
+import torch
+import argparse
 from collections import deque
 from tqdm import trange
-import torch 
-import argparse
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+
+
 
 if __name__ == '__main__':
     parse = argparse.ArgumentParser()
@@ -44,7 +47,9 @@ if __name__ == '__main__':
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args['learning_rate'])
 
+    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2, eta_min=1e-7)
+
     #Train(args, model, kg_data_loader, rec_data, kg_data, extractor, optimizer, device)
-    TrainLightGCN(args, model, kg_data_loader, rec_data, kg_data, extractor, optimizer, device)
-    result = Test(args, rec_data, kg_data, model, 'test', device)
+    TrainLightGCN(args, model, kg_data_loader, rec_data, kg_data, extractor, optimizer, scheduler, device)
+    result = Test(args, rec_data,  model, 'test', device)
 

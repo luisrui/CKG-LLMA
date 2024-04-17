@@ -64,7 +64,7 @@ def Test(args, recdataset : RecTrainDataset, model, mode : dict, device):
         results['ndcg'] /= float(len(users))
 
         print("Results:")
-        print(f"Precision: {results['precision']:.3f}")
-        print(f"Recall: {results['recall']:.3f}")
-        print(f"NDCG: {results['ndcg']:.3f}")
+        print(f"Precision: {[f'{p:.3f}' for p in results['precision']]}")
+        print(f"Recall: {[f'{r:.3f}' for r in results['recall']]}")
+        print(f"NDCG: {[f'{n:.3f}' for n in results['ndcg']]}")
         return results

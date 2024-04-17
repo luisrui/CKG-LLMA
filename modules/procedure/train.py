@@ -5,9 +5,11 @@ from tqdm import trange
 from ..utils import triples_transfer_to_graph
 from .test import Test
 
-def Train(args, model, data_loader, rec_data, kg_data, extractor, optimizer, device):
+def Train(args, model, data_loader, rec_data, kg_data, extractor, optimizer, scheduler, device):
     steps_per_epoch = len(data_loader)
     losses = deque([], steps_per_epoch)
+    losses_bpr = deque([], steps_per_epoch)
+    losses_kge = deque([], steps_per_epoch)
     epoch_counter = trange(args['start_epoch'], args['epoch'], ncols=0)
     for e in epoch_counter:
         for (users, pos_items, reviews) in data_loader:
@@ -26,21 +28,25 @@ def Train(args, model, data_loader, rec_data, kg_data, extractor, optimizer, dev
             optimizer.step()
 
             losses.append(loss.item())
+            losses_bpr.append(bpr_loss.item())
+            losses_kge.append(kge_loss.item())
             epoch_counter.set_description("Epoch %d |loss: %.3f |bpr_loss: %.3f |kge_loss: %.3f" % (
                 e + 1,
                 np.mean(losses),
-                bpr_loss.item(),
-                kge_loss.item()
+                np.mean(losses_bpr),
+                np.mean(losses_kge)
                 )
             )
+        scheduler.step()
         if e % args['eval_interval'] == 0:
             result = Test(args, rec_data, kg_data, model, 'valid', device)
             save_model_name = os.path.join(args['save_path'] + f'checkpoint/epoch_{e + 1}_{type(model).__name__}.ckpt')
             model.save_checkpoint(save_model_name)
 
-def TrainLightGCN(args, model, data_loader, rec_data, kg_data, extractor, optimizer, device):
+def TrainLightGCN(args, model, data_loader, rec_data, kg_data, extractor, optimizer, scheduler, device):
     steps_per_epoch = len(data_loader)
     losses = deque([], steps_per_epoch)
+    losses_bpr = deque([], steps_per_epoch)
     epoch_counter = trange(args['start_epoch'], args['epoch'], ncols=0)
     for e in epoch_counter:
         for (users, pos_items, reviews) in data_loader:
@@ -57,13 +63,15 @@ def TrainLightGCN(args, model, data_loader, rec_data, kg_data, extractor, optimi
             optimizer.step()
 
             losses.append(loss.item())
+            losses_bpr.append(bpr_loss.item())
             epoch_counter.set_description("Epoch %d |loss: %.3f |bpr_loss: %.3f" % (
                 e + 1,
                 np.mean(losses),
-                bpr_loss.item(),
+                np.mean(losses_bpr)
                 )
             )
+        scheduler.step()
         if (e + 1) % args['eval_interval'] == 0:
-            result = Test(args, rec_data, kg_data, model, 'valid', device)
             save_model_name = args['save_path'] + f'./checkpoint/epoch_{e + 1}_{type(model).__name__}.ckpt'
             model.save_checkpoint(save_model_name)
+            result = Test(args, rec_data,  model, 'valid', device)

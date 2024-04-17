@@ -1,9 +1,9 @@
 cuda: 7
 data:
-      name: 'AmazonBookTiny'
+      name: 'MovieLens1M'
 ### Training
 seed: 42
-learning_rate : 0.01
+learning_rate : 0.001
 epoch : 100
 start_epoch : 0
 batch_size : 64
@@ -15,7 +15,7 @@ dataloader_n_workers : 4
 embedding_dim : 200
 hidden_embedding_dim : 400
 isPretrain : 0
-n_layers_lightgcn : 3
+n_layers_lightgcn : 10
 loss_kge_weight : 0.5
 loss_reg_weight : 0.001
 
