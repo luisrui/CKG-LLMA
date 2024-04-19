@@ -26,8 +26,8 @@ data_config = {
         'user' : 'User_id',
         'item' : 'Id',
         'review' : 'review/text',
-        'num_users' : 836500,
-        'num_items' : 200880, 
+        'num_users' : 70994,
+        'num_items' : 64117, 
     },
     'AmazonBookTiny' : {
         'user' : 'User_id',
@@ -73,12 +73,25 @@ class KGRecDataset(torch_geometric.data.Dataset):
 
         super(KGRecDataset, self).__init__(self._data_dir, transform, pre_transform)
 
+        self.struc_dataset = self.get(0)
+
         if os.path.exists(f'./dataset/{self.name}/pre_saved/u_of_u.pt'):
             self._load_adj()
+            # Build self.i_of_i
+            edge_index = self.struc_dataset.edge_index
+            edge_type = self.struc_dataset.edge_type
+            print('Building item-item relations...')
+            item_mask = (edge_index[0] >= self.num_user) & (edge_index[0] < self.num_user + self.num_items) & \
+                (edge_index[1] >= self.num_user) & (edge_index[1] < self.num_user + self.num_items)
+            #item_item = torch.full((self.num_items, self.num_items), -1, dtype=torch.int64)
+            item_hs, item_ts, ii_rels = edge_index[0][item_mask].numpy(), edge_index[1][item_mask].numpy(), edge_type[item_mask].numpy()
+            for i in tqdm(range(len(item_hs))):
+                h, t, r = item_hs[i], item_ts[i], ii_rels[i]
+                self.i_of_i[h].append((r, t))
+                self.i_of_i[t].append((r, h))
         else:
             raise ValueError('No pre-saved u-i relations found. Please run the pre-processing script first.')
 
-        self.struc_dataset = self.get(0)
 
     def __len__(self):
         return len(self.trainset)
@@ -86,7 +99,7 @@ class KGRecDataset(torch_geometric.data.Dataset):
     def _load_adj(self):
         self.u_of_i_all = torch.load(f'./dataset/{self.name}/pre_saved/u_of_i_all.pt')
         self.u_of_u = torch.load(f'./dataset/{self.name}/pre_saved/u_of_u.pt')
-        self.i_of_i = torch.load(f'./dataset/{self.name}/pre_saved/i_of_i.pt')
+        #self.i_of_i = torch.load(f'./dataset/{self.name}/pre_saved/i_of_i.pt')
         self.i_of_a = torch.load(f'./dataset/{self.name}/pre_saved/i_of_a.pt')
         self.t_of_hr = torch.load(f'./dataset/{self.name}/pre_saved/t_of_hr.pt')
         #self.i_of_u = torch.load(f'./dataset/{self.name}/pre_saved/i_of_u.pt')
@@ -168,6 +181,7 @@ class KGRecDataset(torch_geometric.data.Dataset):
             self.t_of_hr[(h, r)].append(t)
 
         os.makedirs(f'./dataset/{self.name}/pre_saved/', exist_ok=True)
+        print('saving pre-saved relations...')
         torch.save(self.u_of_u, f'./dataset/{self.name}/pre_saved/u_of_u.pt')
         torch.save(self.i_of_i, f'./dataset/{self.name}/pre_saved/i_of_i.pt') 
         torch.save(self.u_of_i_all, f'./dataset/{self.name}/pre_saved/u_of_i_all.pt')

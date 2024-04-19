@@ -8,3 +8,4 @@
 **.so
 **.rendered.**.cpp
 **/checkpoint
+**/saved_graphs

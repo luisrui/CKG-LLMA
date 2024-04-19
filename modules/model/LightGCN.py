@@ -43,7 +43,7 @@ class LightGCN(BasicModel):
         sup_neg_ratings = inner_product(user_embs, neg_item_embs)   # [batch_size]
         sup_logits = sup_pos_ratings - sup_neg_ratings              # [batch_size]
 
-        bpr_loss = -torch.sum(F.logsigmoid(sup_logits))
+        bpr_loss = -torch.mean(F.logsigmoid(sup_logits))
 
         # Reg Loss
         reg_loss = l2_loss(

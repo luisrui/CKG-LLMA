@@ -72,9 +72,10 @@ class Model(BasicModel):
         self.num_items = data_config[args["data"]["name"]]['num_items']
         self.ent_embeddings_kge = nn.Embedding(num_embeddings=len(ent2id), embedding_dim=args['embedding_dim'])
         self.ui_embeddings = nn.Embedding(num_embeddings=self.num_users + self.num_items, embedding_dim=args['embedding_dim'])
-        self.ent_embeddings_llm = nn.Embedding(num_embeddings=len(ent2id), embedding_dim=args['embedding_dim'])
+        #self.ent_embeddings_llm = nn.Embedding(num_embeddings=len(ent2id), embedding_dim=args['embedding_dim'])
         self.rel_embeddings = nn.Embedding(num_embeddings=len(rel2id), embedding_dim=args['embedding_dim'])
-        
+
+        self.fused_embeddings = nn.Embedding(num_embeddings=self.num_users + self.num_items, embedding_dim=args['embedding_dim'])
         # if args['isPretrain'] == 0:
         #     nn.init.normal_(self.ent_embeddings.weight, std=0.1)
         #     nn.init.normal_(self.rel_embedding, std=0.1)
@@ -93,9 +94,14 @@ class Model(BasicModel):
         self.act_func = nn.LeakyReLU(negative_slope=0.2)
         self.remap_layer = nn.Linear(args['embedding_dim'] * 3, args['embedding_dim'])
         
+        self.fusion_mlp = nn.Sequential(
+            nn.Linear(args['embedding_dim'] * 2, args['embedding_dim']),
+            nn.ReLU(),
+            nn.Linear(args['embedding_dim'], args['embedding_dim'])
+        )
         #### Evaluation
         self.rate_act_fn = nn.Sigmoid()
-        
+    
     def forward(self, edge_indexs, edge_types, users, items, neg_items):
         ### KG Embedding Learning(only training the ent_embeddings_kge, and rel_embeddings)
         x_list = []
@@ -132,20 +138,32 @@ class Model(BasicModel):
         item_embs = F.embedding(items - self.num_users, item_embeddings)
         neg_item_embs = F.embedding(neg_items - self.num_users, item_embeddings)
 
-        sup_pos_ratings = inner_product(user_embs, item_embs)       # [batch_size]
-        sup_neg_ratings = inner_product(user_embs, neg_item_embs)   # [batch_size]
+        ent_user_embs = self.ent_embeddings_kge(users)
+        ent_pos_item_embs = self.ent_embeddings_kge(items)
+        ent_neg_item_embs = self.ent_embeddings_kge(neg_items)
+
+        fused_user_embs = self._fusion(ent_user_embs, user_embs)
+        fused_pos_item_embs = self._fusion(ent_pos_item_embs, item_embs)
+        fused_neg_item_embs = self._fusion(ent_neg_item_embs, neg_item_embs)
+
+        sup_pos_ratings = inner_product(fused_user_embs, fused_pos_item_embs)       # [batch_size]
+        sup_neg_ratings = inner_product(fused_user_embs, fused_neg_item_embs)   # [batch_size]
         sup_logits = sup_pos_ratings - sup_neg_ratings              # [batch_size]
 
-        bpr_loss = -torch.sum(F.logsigmoid(sup_logits))
+        bpr_loss = -torch.mean(F.logsigmoid(sup_logits))
 
         # Reg Loss
         reg_loss = l2_loss(
-            self.ui_embeddings(users),
-            self.ui_embeddings(items),
-            self.ui_embeddings(neg_items)
+            fused_user_embs,
+            fused_pos_item_embs,
+            fused_neg_item_embs
         )
         
         total_loss = bpr_loss + self.reg_weight * reg_loss + self.kge_weight * kge_loss
+
+        self.fused_embeddings.weight.data[users] = fused_user_embs
+        self.fused_embeddings.weight.data[items] = fused_pos_item_embs
+
         return total_loss, bpr_loss, kge_loss
  
     def _forward_lightgcn(self, norm_adj, ego_embeddings):
@@ -166,13 +184,15 @@ class Model(BasicModel):
 
         return user_embeddings, item_embeddings
     
-    def eval(self):
-        super(Model, self).eval()
-        self._user_embeddings_final, self._item_embeddings_final = self._forward_gcn(self.norm_adj, self.ui_embeddings.weight)
+    def _fusion(self, kge_embeddings, ui_embeddings):
+        ### MLP Fusion
+        concat_embeddings = torch.cat((kge_embeddings, ui_embeddings), dim=-1)
+        fused_embeddings = self.fusion_mlp(concat_embeddings)
+        return fused_embeddings
     
     def getUsersRating(self, users):
-        users_emb = self.ui_embeddings(users)
-        items_emb = self.ui_embeddings.weight[self.num_users:]
+        users_emb = self.fused_embeddings(users)
+        items_emb = self.fused_embeddings.weight[self.num_users:]
         rating = self.rate_act_fn(torch.matmul(users_emb, items_emb.T))
         return rating
 

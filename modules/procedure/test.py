@@ -18,6 +18,7 @@ def test_one_batch(args, X):
             'ndcg':np.array(ndcg)}
 
 def Test(args, recdataset : RecTrainDataset, model, mode : dict, device):
+    print(f'Model Tesing for {mode} set')
     u_batch_size = args['test_u_batch_size']
     model.eval()
     testset = recdataset.get_wrapped_set(mode)
@@ -64,7 +65,7 @@ def Test(args, recdataset : RecTrainDataset, model, mode : dict, device):
         results['ndcg'] /= float(len(users))
 
         print("Results:")
-        print(f"Precision: {[f'{p:.3f}' for p in results['precision']]}")
-        print(f"Recall: {[f'{r:.3f}' for r in results['recall']]}")
-        print(f"NDCG: {[f'{n:.3f}' for n in results['ndcg']]}")
+        print(f"Precision: {[f'{p:.6f}' for p in results['precision']]}")
+        print(f"Recall: {[f'{r:.6f}' for r in results['recall']]}")
+        print(f"NDCG: {[f'{n:.6f}' for n in results['ndcg']]}")
         return results
