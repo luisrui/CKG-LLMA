@@ -9,12 +9,14 @@ start_epoch : 0
 batch_size : 32
 
 ### Model Setting
+isPretrain : 0
 kg_neg_size : 100
 max_sample_neighbors : 3
 dataloader_n_workers : 8
 embedding_dim : 64
-hidden_embedding_dim : 400
-isPretrain : 0
+ent_embedding_dim : 64
+rel_embedding_dim : 64
+hidden_embedding_dim : 256
 n_layers_lightgcn : 3
 loss_kge_weight : 0.5
 loss_reg_weight : 0.001

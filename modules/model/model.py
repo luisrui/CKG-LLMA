@@ -11,6 +11,8 @@ import json
 from ..data import data_config, NegativeSampler
 from ..utils import (inner_product, l2_loss, MarginLoss)
 
+from .KGEmb import *
+
 class BasicModel(nn.Module):    
     def __init__(self):
         super(BasicModel, self).__init__()
@@ -70,10 +72,10 @@ class Model(BasicModel):
         # users, items, features
         self.num_users = data_config[args["data"]["name"]]['num_users']
         self.num_items = data_config[args["data"]["name"]]['num_items']
-        self.ent_embeddings_kge = nn.Embedding(num_embeddings=len(ent2id), embedding_dim=args['embedding_dim'])
+        self.ent_embeddings_kge = nn.Embedding(num_embeddings=len(ent2id), embedding_dim=args['ent_embedding_dim'])
         self.ui_embeddings = nn.Embedding(num_embeddings=self.num_users + self.num_items, embedding_dim=args['embedding_dim'])
         #self.ent_embeddings_llm = nn.Embedding(num_embeddings=len(ent2id), embedding_dim=args['embedding_dim'])
-        self.rel_embeddings = nn.Embedding(num_embeddings=len(rel2id), embedding_dim=args['embedding_dim'])
+        self.rel_embeddings = nn.Embedding(num_embeddings=len(rel2id), embedding_dim=args['rel_embedding_dim'])
 
         self.fused_embeddings = nn.Embedding(num_embeddings=self.num_users + self.num_items, embedding_dim=args['embedding_dim'])
         # if args['isPretrain'] == 0:
@@ -87,6 +89,7 @@ class Model(BasicModel):
         self.norm_adj = norm_adj.to(device)
 
         self.Neg_Sampler = NegativeSampler(args['data']['name'], kg, ent2id, rel2id, args['kg_neg_size'])
+        #self.KGEmodel = TransR(args['ent_embedding_dim'], args['rel_embedding_dim'], len(rel2id))
         self.KGEmodel = TransE()
         self.KGEloss = MarginLoss(margin=3.0)
         self.conv_gcn1 = RGCNConv(in_channels=args['embedding_dim'], out_channels=args['hidden_embedding_dim'], num_relations=len(rel2id), num_bases=len(rel2id))
@@ -104,31 +107,27 @@ class Model(BasicModel):
     
     def forward(self, edge_indexs, edge_types, users, items, neg_items):
         ### KG Embedding Learning(only training the ent_embeddings_kge, and rel_embeddings)
-        x_list = []
-        for edge_index, edge_type in zip(edge_indexs, edge_types):
-            edge_index = edge_index.to(self.device)
-            edge_type = edge_type.to(self.device)
-            x = self.conv_gcn1(self.ent_embeddings_kge.weight, edge_index, edge_type)
-            x = self.act_func(x)
-            x = self.conv_gcn2(x, edge_index, edge_type)
-            x_list.append(x)
-
-        #Concatenation and Projection
-        x = torch.concat(x_list, dim=-1)
-        x = F.normalize(x, p=2, dim=1)
-        x = self.remap_layer(x)
+        x = self._forward_rgcn(self.ent_embeddings_kge.weight, edge_indexs, edge_types)        
+        #### the category of subgraphs are: uu, ui, ii]
+        # egde_index_uu, edge_index_ui, edge_index_ii = edge_indexs
+        # edge_type_uu, edge_type_ui, edge_type_ii = edge_types
+        # egde_index_uu, edge_type_uu = egde_index_uu.to(self.device), edge_type_uu.to(self.device)
+        # edge_index_ui, edge_type_ui = edge_index_ui.to(self.device), edge_type_ui.to(self.device)
+        # edge_index_ii, edge_type_ii = edge_index_ii.to(self.device), edge_type_ii.to(self.device)
 
         merged_edge_index = torch.cat(edge_indexs, dim=1)
         merged_edge_type = torch.cat(edge_types)
+        rels_for_reg = self.rel_embeddings(merged_edge_type.unique().to(self.device))
         edge_index_expand, edge_type_expand = self.Neg_Sampler.Triples_neg_sample(merged_edge_index, merged_edge_type)
         edge_index_expand = edge_index_expand.to(self.device)
         edge_type_expand = edge_type_expand.to(self.device)
-
+    
         head = x[edge_index_expand[0].long()]
         tail = x[edge_index_expand[1].long()]
         rels = self.rel_embeddings(edge_type_expand)
 
         pos_score, neg_score = self.KGEmodel(head, tail, rels, len(merged_edge_type))
+        #pos_score, neg_score = self.KGEmodel(head, tail, rels, edge_type_expand, len(merged_edge_type))
         kge_loss = self.KGEloss(pos_score, neg_score)
 
         ### Rate Prediction Training(only training the ui_embeddings)
@@ -142,29 +141,57 @@ class Model(BasicModel):
         ent_pos_item_embs = self.ent_embeddings_kge(items)
         ent_neg_item_embs = self.ent_embeddings_kge(neg_items)
 
-        fused_user_embs = self._fusion(ent_user_embs, user_embs)
+        with torch.no_grad():
+            fused_user_embs = self._fusion(ent_user_embs, user_embs)
         fused_pos_item_embs = self._fusion(ent_pos_item_embs, item_embs)
         fused_neg_item_embs = self._fusion(ent_neg_item_embs, neg_item_embs)
 
-        sup_pos_ratings = inner_product(fused_user_embs, fused_pos_item_embs)       # [batch_size]
-        sup_neg_ratings = inner_product(fused_user_embs, fused_neg_item_embs)   # [batch_size]
+        # sup_pos_ratings = inner_product(fused_user_embs, fused_pos_item_embs)       # [batch_size]
+        # sup_neg_ratings = inner_product(fused_user_embs, fused_neg_item_embs)   # [batch_size]
+
+        sup_pos_ratings = inner_product(user_embs, fused_pos_item_embs)       # [batch_size]
+        sup_neg_ratings = inner_product(user_embs, fused_neg_item_embs)   # [batch_size]
         sup_logits = sup_pos_ratings - sup_neg_ratings              # [batch_size]
 
-        bpr_loss = -torch.mean(F.logsigmoid(sup_logits))
+        bpr_loss = -torch.mean(F.logsigmoid(input=sup_logits))
 
         # Reg Loss
+        # reg_loss = l2_loss(
+        #     fused_user_embs,
+        #     fused_pos_item_embs,
+        #     fused_neg_item_embs
+        # )
         reg_loss = l2_loss(
-            fused_user_embs,
+            user_embs,
+            rels_for_reg,
+            ent_user_embs,
             fused_pos_item_embs,
             fused_neg_item_embs
         )
         
         total_loss = bpr_loss + self.reg_weight * reg_loss + self.kge_weight * kge_loss
 
-        self.fused_embeddings.weight.data[users] = fused_user_embs
-        self.fused_embeddings.weight.data[items] = fused_pos_item_embs
+        with torch.no_grad():
+            self.fused_embeddings.weight.data[users] = fused_user_embs
+            self.fused_embeddings.weight.data[items] = fused_pos_item_embs
 
         return total_loss, bpr_loss, kge_loss
+    
+    def _forward_rgcn(self, x, edge_indexs, edge_types):
+        x_list = []
+        for edge_index, edge_type in zip(edge_indexs, edge_types):
+            edge_index = edge_index.to(self.device)
+            edge_type = edge_type.to(self.device)
+            x = self.conv_gcn1(self.ent_embeddings_kge.weight, edge_index, edge_type)
+            x = self.act_func(x)
+            x = self.conv_gcn2(x, edge_index, edge_type)
+            x_list.append(x)
+        
+        #Concatenation and Projection
+        x = torch.concat(x_list, dim=-1)
+        x = F.normalize(x, p=2, dim=1)
+        x = self.remap_layer(x)
+        return x
  
     def _forward_lightgcn(self, norm_adj, ego_embeddings):
         '''
@@ -186,52 +213,49 @@ class Model(BasicModel):
     
     def _fusion(self, kge_embeddings, ui_embeddings):
         ### MLP Fusion
-        concat_embeddings = torch.cat((kge_embeddings, ui_embeddings), dim=-1)
-        fused_embeddings = self.fusion_mlp(concat_embeddings)
-        return fused_embeddings
-    
+        # concat_embs = torch.cat((kge_embeddings, ui_embeddings), dim=-1)
+        # fused_embs = self.fusion_mlp(concat_embs)
+        # return fused_embs
+
+        ### Bi-directional Attention Fusion
+        query = kge_embeddings
+        key = ui_embeddings
+
+        scores = torch.bmm(query.unsqueeze(1), key.unsqueeze(-1)).squeeze(-1).squeeze(-1)  # (batch_size)
+        attn_weights = F.softmax(scores, dim=-1).unsqueeze(-1)  # (batch_size, 1)
+        kge_att_ui = attn_weights * kge_embeddings  # (batch_size, emb_dim)  
+        ui_att_kge = (1 - attn_weights) * ui_embeddings  # (batch_size, emb_dim)
+        
+        fused_embs = torch.cat((kge_att_ui, ui_att_kge), dim=-1)  # (batch_size, 2*emb_dim)
+        fused_embs = self.fusion_mlp(fused_embs)  # (batch_size, emb_dim)
+        
+        return fused_embs
+        
     def getUsersRating(self, users):
         users_emb = self.fused_embeddings(users)
         items_emb = self.fused_embeddings.weight[self.num_users:]
         rating = self.rate_act_fn(torch.matmul(users_emb, items_emb.T))
         return rating
-
-class TransE(nn.Module):
-    '''
-    TransE Model
-
-    Compute the score of the triplets based on:
-        score = ||h + r - t||_p
-    '''
-    def __init__(self, score_norm_flag : bool = False, p_norm : int = 1):
-        super(TransE, self).__init__()
-        self.score_norm_flag = score_norm_flag
-        self.p_norm = p_norm
-
-    def forward(self, head, tail, rel, pos_num, mode='normal'):
-        if self.score_norm_flag:
-            head = F.normalize(head, 2, -1)
-            rel = F.normalize(rel, 2, -1)
-            tail = F.normalize(tail, 2, -1)
-        if mode != 'normal':
-            head = head.view(-1, rel.shape[0], head.shape[-1])
-            tail = tail.view(-1, rel.shape[0], tail.shape[-1])
-            rel = rel.view(-1, rel.shape[0], rel.shape[-1])
-        if mode == 'head_batch':
-            score = head + (rel - tail)
-        else:
-            score = (head + rel) - tail
-        score = torch.norm(score, self.p_norm, -1).flatten()
-        pos_score = self._get_positive_score(score, pos_num)
-        neg_score = self._get_negative_score(score, pos_num)
-        return pos_score, neg_score
     
-    def _get_positive_score(self, score, num_pos_samples):
-        positive_score = score[:num_pos_samples]
-        positive_score = positive_score.view(-1, num_pos_samples).permute(1, 0)
-        return positive_score
+    def pretrain_kg_embeddings(self, edge_indexs, edge_types):
+        merged_edge_index = torch.cat(edge_indexs, dim=1)
+        merged_edge_type = torch.cat(edge_types)
+        rels_for_reg = self.rel_embeddings(merged_edge_type.unique().to(self.device))
+        edge_index_expand, edge_type_expand = self.Neg_Sampler.Triples_neg_sample(merged_edge_index, merged_edge_type)
+        edge_index_expand = edge_index_expand.to(self.device)
+        edge_type_expand = edge_type_expand.to(self.device)
+    
+        head = self.ent_embeddings_kge(edge_index_expand[0].long())
+        tail = self.ent_embeddings_kge(edge_index_expand[1].long())
+        rels = self.rel_embeddings(edge_type_expand)
 
-    def _get_negative_score(self, score, num_pos_samples):
-        negative_score = score[num_pos_samples:]
-        negative_score = negative_score.view(-1, num_pos_samples).permute(1, 0)
-        return negative_score
+        pos_score, neg_score = self.KGEmodel(head, tail, rels, len(merged_edge_type))
+        #pos_score, neg_score = self.KGEmodel(head, tail, rels, edge_type_expand, len(merged_edge_type))
+        kge_loss = self.KGEloss(pos_score, neg_score)
+        reg_loss = l2_loss(
+            head,
+            tail,
+            rels
+        )
+        loss = kge_loss + self.reg_weight * reg_loss
+        return loss, kge_loss

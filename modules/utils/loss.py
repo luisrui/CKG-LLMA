@@ -14,10 +14,12 @@ def l2_loss(*weights):
 
     """
     loss = 0.0
+
     for w in weights:
         loss += torch.sum(torch.pow(w, 2))
 
-    return 0.5*loss
+    average_loss = 0.5 * loss / len(weights) if len(weights) > 0 else 0
+    return average_loss
 
 class MarginLoss(nn.Module):
     '''Margin loss for ranking
