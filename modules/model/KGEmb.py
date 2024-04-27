@@ -66,17 +66,6 @@ class TransR(nn.Module):
         self.p_norm = p_norm
         self.rand_init = rand_init
 
-        self.transfer_matrix = nn.Embedding(self.rel_num, self.dim_e * self.dim_r)
-        if not self.rand_init:
-            identity = torch.zeros(self.dim_e, self.dim_r)
-            for i in range(min(self.dim_e, self.dim_r)):
-                identity[i][i] = 1
-            identity = identity.view(self.dim_r * self.dim_e)
-            for i in range(self.rel_num):
-                self.transfer_matrix.weight.data[i] = identity
-        else:
-            nn.init.xavier_uniform_(self.transfer_matrix.weight.data)
-
     def _calc(self, h, t, r, mode):
         if self.norm_flag:
             h = F.normalize(h, 2, -1)
@@ -103,8 +92,8 @@ class TransR(nn.Module):
             e = torch.matmul(e, r_transfer)
         return e.view(-1, self.dim_r)
 
-    def forward(self, head, tail, rel, rel_id, pos_num, mode='normal'):
-        r_transfer = self.transfer_matrix(rel_id)
+    def forward(self, head, tail, rel, rel_id, pos_num, trans_matrix, mode='normal'):
+        r_transfer = trans_matrix[rel_id]
         head = self._transfer(head, r_transfer)
         tail = self._transfer(tail, r_transfer)
         score = self._calc(head ,tail, rel, mode)

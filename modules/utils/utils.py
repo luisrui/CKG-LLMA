@@ -3,6 +3,7 @@ import torch
 import random
 import numpy as np
 
+from torch_scatter import scatter_sum, scatter_max
 
 def read_yaml(path):
     file = open(path, "r", encoding="utf-8")
@@ -61,6 +62,18 @@ def minibatch(*tensors, **kwargs):
     else:
         for i in range(0, len(tensors[0]), batch_size):
             yield tuple(x[i:i + batch_size] for x in tensors)
+
+def edge_softmax(edge_index, edge_attr):
+    _, dst = edge_index
+    unique_dst, inv_idx = torch.unique(dst, return_inverse=True)
+    
+    edge_attr = torch.exp(edge_attr)
+    
+    sum_att_per_dst = scatter_sum(edge_attr, inv_idx, dim=0, dim_size=unique_dst.size(0))
+    
+    edge_attr = edge_attr / sum_att_per_dst[inv_idx]
+    
+    return edge_attr
 
 def getLabel(test_data, pred_data):
     r = []

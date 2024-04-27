@@ -1,4 +1,5 @@
 import os
+import time
 import numpy as np
 import pickle
 from tqdm import tqdm
@@ -91,19 +92,32 @@ def TrainLightGCN(args, model, data_loader, rec_data, kg_data, extractor, optimi
             model.save_checkpoint(save_model_name)
             result = Test(args, rec_data, model, "valid", device)
 
-def TrainwithGraph(total_epoch, args, model, data_loader, rec_data, optimizer, scheduler, device):
-    steps_per_epoch = len(data_loader)
+def TrainwithGraph(total_epoch, args, model, rec_data, optimizer, scheduler, device):
+    epoch_counter = trange(args["start_epoch"], total_epoch, ncols=0)
+
+    start_time = time.time()
+    print(f'Loading saved graphs for {rec_data.name}...')
+    graphs_info = pickle.load(open(f'./saved_graphs/{rec_data.name}_e{total_epoch-1}.pkl', 'rb'))
+    end_time = time.time()
+    print(f'Loaded {total_epoch} epochs of graphs, time is {end_time - start_time} seconds.')
+
+    steps_per_epoch = len(graphs_info[0]['users'])
     losses = deque([], steps_per_epoch)
     losses_bpr = deque([], steps_per_epoch)
     losses_kge = deque([], steps_per_epoch)
-    epoch_counter = trange(args["start_epoch"], total_epoch, ncols=0)
-    subgraphs_collect = pickle.load(open(f'./saved_graphs/{rec_data.name}_e{total_epoch-1}.pkl', 'rb'))
-
+    
     for e in epoch_counter:
-        for users, pos_items, reviews in data_loader:
-            neg_items = rec_data.negative_sample(users, pos_items)
-            subgraphs = subgraphs_collect[e]
-            edge_indexs, edge_types = triples_transfer_to_graph(subgraphs)
+        epoch_info = graphs_info[e]
+        users_epoch, pos_items_epoch, neg_items_epoch = epoch_info['users'], epoch_info['pos_items'], epoch_info['neg_items']
+        uu_graphs, ui_graphs, ii_graphs = epoch_info['uu'], epoch_info['ui'], epoch_info['ii']
+        for (users, 
+             pos_items,
+             neg_items,
+             uu_graph,
+             ui_graph,
+             ii_graph) in zip(users_epoch, pos_items_epoch, neg_items_epoch, uu_graphs, ui_graphs, ii_graphs):
+            
+            edge_indexs, edge_types = triples_transfer_to_graph([uu_graph, ui_graph, ii_graph])
 
             users = users.to(device)
             pos_items = pos_items.to(device)
@@ -127,14 +141,14 @@ def TrainwithGraph(total_epoch, args, model, data_loader, rec_data, optimizer, s
         if scheduler:
             scheduler.step()
 
-        if e % args["save_interval"] == 0:
+        if (e + 1) % args["save_interval"] == 0:
             save_model_name = os.path.join(
                 args["save_path"]
                 + f"checkpoint/epoch_{e + 1}_{type(model).__name__}_{rec_data.name}.ckpt"
             )
             model.save_checkpoint(save_model_name)
             result = Test(args, rec_data,  model, "valid", device)
-        elif e % args["eval_interval"] == 0:
+        elif (e + 1) % args["eval_interval"] == 0:
             result = Test(args, rec_data,  model, "valid", device)
 
 def Generate_subgraphs(epochs, data_loader, extractor, rec_data):
@@ -147,7 +161,7 @@ def Generate_subgraphs(epochs, data_loader, extractor, rec_data):
 
         epoch_info = defaultdict(list)
         
-        for users, pos_items, reviews in tqdm(data_loader, leave=False):
+        for users, pos_items, reviews in tqdm(data_loader):
             neg_items = rec_data.negative_sample(users, pos_items)
             subgraphs = extractor.sample_subgraph(
                 ["uu", "ui", "ii"], users, pos_items, neg_items
@@ -161,7 +175,7 @@ def Generate_subgraphs(epochs, data_loader, extractor, rec_data):
 
         subgraphs_collect[e] = epoch_info
 
-        with open(f'./saved_graphs/{rec_data.name}_e{e}.pkl', 'wb') as f:
+        with open(f'./saved_graphs/{rec_data.name}_e{e}_v3.pkl', 'wb') as f:
             pickle.dump(subgraphs_collect, f)
 
 def Pretrain_KG_Embeddings(total_epoch, args, model, data_loader, rec_data, optimizer, scheduler, device):

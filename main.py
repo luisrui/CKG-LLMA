@@ -25,15 +25,15 @@ if __name__ == "__main__":
     set_random_seed(seed=args["seed"])
     kg_data = KGRecDataset(args)
     rec_data = RecTrainDataset(args)
-    extractor = Extractor(
-        args=args,
-        num_user=data_config[args["data"]["name"]]["num_users"],
-        num_items=data_config[args["data"]["name"]]["num_users"],
-        ent2id=rec_data.ent2id,
-        rel2id=rec_data.rel2id,
-        srcKG=kg_data,
-        recData=rec_data,
-    )
+    # extractor = Extractor(
+    #     args=args,
+    #     num_user=data_config[args["data"]["name"]]["num_users"],
+    #     num_items=data_config[args["data"]["name"]]["num_users"],
+    #     ent2id=rec_data.ent2id,
+    #     rel2id=rec_data.rel2id,
+    #     srcKG=kg_data,
+    #     recData=rec_data,
+    # )
 
     kg_data_loader = torch.utils.data.DataLoader(
         rec_data,
@@ -71,8 +71,8 @@ if __name__ == "__main__":
     print("topks selected: ", args["topks"])
 
     #Pretrain_KG_Embeddings(50, args, model, kg_data_loader, rec_data, optimizer, scheduler, device)
-    #TrainwithGraph(50, args, model, kg_data_loader, rec_data, optimizer, scheduler, device)
+    TrainwithGraph(24, args, model, rec_data, optimizer, scheduler, device)
     # Train(args, model, kg_data_loader, rec_data, kg_data, extractor, optimizer, scheduler, device)
     # #TrainLightGCN(args, model, kg_data_loader, rec_data, kg_data, extractor, optimizer, scheduler, device)
-    #result = Test(args, rec_data, model, "test", device)
-    Generate_subgraphs(50, kg_data_loader, extractor, rec_data)
+    result = Test(args, rec_data, model, "test", device)
+    #Generate_subgraphs(50, kg_data_loader, extractor, rec_data)
