@@ -11,7 +11,7 @@ from .dataset import KGRecDataset, RecTrainDataset
 class Extractor():
     '''
     Extracting subgraphs based on one-hop neighbours. When the core node is user, there should be two subgraphs:(user->user, user->item); when the core node is item, 
-    there should be two subgraphs:(item->item, item->user). The total number of graphs of one pair of (user, item) should be 4.
+    there should be two subgraphs:(item->item, user->item). The total number of graphs of one pair of (user, item) should be 4.
     '''
     def __init__(self, args : dict, num_user : int, num_items : int, ent2id : list, rel2id : list, srcKG : KGRecDataset, recData: RecTrainDataset):
 
@@ -58,23 +58,33 @@ class Extractor():
                 rand_idx = torch.rand(padded_user_neighbors.shape).argsort(dim=1)
                 top_k_idx = rand_idx[:, :self.max_neighbors]
                 sampled_user_neighbors = torch.gather(padded_user_neighbors, 1, top_k_idx)
-                u_u_extend_info = [[user.item(), self.rel2id['co-liked'], co_usr.item()] for user, nbrs in zip(batch_users, sampled_user_neighbors) for co_usr in nbrs if co_usr != 0]
+                u_u_extend_info = [tuple([user.item(), self.rel2id['co-liked'], co_usr.item()]) for user, nbrs in zip(batch_users, sampled_user_neighbors) for co_usr in nbrs if co_usr != 0]
                 subgraph_uu.extend(u_u_extend_info)
-
+                
+                selected_co_items = list()
                 for user, _, co_usr in u_u_extend_info:
                     common_liked_items = list(set(self.u_of_i[user]) & set(self.u_of_i[co_usr]) & set(batch_items.tolist()))
                     if common_liked_items:
-                        co_item = np.random.choice(common_liked_items)
-                        subgraph_uu.append([user, self.rel2id['liked'], co_item])
-                        subgraph_uu.append([co_usr, self.rel2id['liked'], co_item])
-                        subgraph_uu.extend([[co_item, r, t] for r, t in self.i_of_a[co_item]])
+                        for i in range(len(common_liked_items)):
+                            co_item = common_liked_items[i]
+                            if co_item not in selected_co_items:
+                                selected_co_items.append(co_item)
+                                subgraph_uu.append(tuple([user, self.rel2id['liked'], co_item]))
+                                subgraph_uu.append(tuple([co_usr, self.rel2id['liked'], co_item]))
+                                subgraph_uu.extend([tuple([co_item, r, t]) for r, t in self.i_of_a[co_item]])
+                                break
+                
+                subgraph_uu = set(subgraph_uu)
+                subgraph_uu = [list(triple) for triple in subgraph_uu]
 
             elif aug_tupe == 'ui':
                 # User -> Item Subgraph (only consider positive items)
-                subgraph_ui.extend([[user.item(), self.rel2id['liked'], item.item()] for user, item in zip(batch_users, batch_pos_items)])
-                subgraph_ui.extend([[item.item(), r, t] for item in batch_pos_items for r, t in self.i_of_a[item.item()]])
+                selected_items = set()
+                subgraph_ui.extend([tuple([user.item(), self.rel2id['liked'], item.item()]) for user, item in zip(batch_users, batch_pos_items)])
+                subgraph_ui.extend([tuple([item.item(), r, t]) for item in batch_pos_items for r, t in self.i_of_a[item.item()]])
+                selected_items.update(batch_pos_items.tolist())
 
-                pos_item_neighbors = [list(set(self.u_of_i[user.item()]) & set(batch_users.tolist())) for user in batch_users]
+                pos_item_neighbors = [list(set(self.u_of_i[user.item()]) & (set(batch_items.tolist()) - selected_items)) for user in batch_users]
                 pos_item_neighbors_lens = [len(nbrs) for nbrs in pos_item_neighbors]
                 max_len = max(pos_item_neighbors_lens)
                 padded_pos_item_neighbors = [nbrs + [0] * (max_len - len(nbrs)) for nbrs in pos_item_neighbors]
@@ -82,10 +92,13 @@ class Extractor():
                 rand_idx = torch.rand(padded_pos_item_neighbors.shape).argsort(dim=1)
                 top_k_idx = rand_idx[:, :self.max_neighbors]
                 sampled_pos_item_neighbors = torch.gather(padded_pos_item_neighbors, 1, top_k_idx)
-                u_i_extend_info = [[user.item(), self.rel2id['liked'], ex_item.item()] for user, nbrs in zip(batch_users, sampled_pos_item_neighbors) for ex_item in nbrs if ex_item != 0]
+                u_i_extend_info = [tuple([user.item(), self.rel2id['liked'], ex_item.item()]) for user, nbrs in zip(batch_users, sampled_pos_item_neighbors) for ex_item in nbrs if ex_item != 0]
                 subgraph_ui.extend(u_i_extend_info)
-                subgraph_ui.extend([[ex_item, r, t] for _, _, ex_item in u_i_extend_info for r, t in self.i_of_a[ex_item]])
-            
+                subgraph_ui.extend([tuple([ex_item, r, t]) for _, _, ex_item in u_i_extend_info for r, t in self.i_of_a[ex_item]])
+                
+                subgraph_ui = set(subgraph_ui)
+                subgraph_ui = [list(triple) for triple in subgraph_ui]
+                            
             elif aug_tupe == 'ii':
                  # Item -> Item Subgraph
                 item_neighbors = [[(rel, nbr) for rel, nbr in self.i_of_i[item.item()] if nbr in batch_items] for item in batch_items]
@@ -98,10 +111,13 @@ class Extractor():
                 batch_indices = torch.arange(len(batch_items)).unsqueeze(1).expand(-1, self.max_neighbors)
                 sampled_item_neighbors = padded_item_neighbors[batch_indices, top_k_idx]
 
-                subgraph_ii.extend([[item.item(), r, t] for item in batch_items for r, t in self.i_of_a[item.item()]])
-                i_i_extend_info = [[item.item(), rel.item(), co_item.item()] for item, nbrs in zip(batch_items, sampled_item_neighbors) for rel, co_item in nbrs if co_item != 0]
+                subgraph_ii.extend([tuple([item.item(), r, t]) for item in batch_items for r, t in self.i_of_a[item.item()]])
+                i_i_extend_info = [tuple([item.item(), rel.item(), co_item.item()]) for item, nbrs in zip(batch_items, sampled_item_neighbors) for rel, co_item in nbrs if co_item != 0]
                 subgraph_ii.extend(i_i_extend_info)
-                subgraph_ii.extend([[co_item, r, t] for _, _, co_item in i_i_extend_info for r, t in self.i_of_a[co_item]])
+                subgraph_ii.extend([tuple([co_item, r, t]) for _, _, co_item in i_i_extend_info for r, t in self.i_of_a[co_item]])
+
+                subgraph_ii = set(subgraph_ii)
+                subgraph_ii = [list(triple) for triple in subgraph_ii]
 
             else:
                 raise ValueError(f'Invalid type {aug_tupe} for subgraph extraction')

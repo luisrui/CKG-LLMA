@@ -118,3 +118,12 @@ def NDCGatK_r(test_data,r,k):
     ndcg = dcg/idcg
     ndcg[np.isnan(ndcg)] = 0.
     return np.sum(ndcg)
+
+def GraphTranslate(triples, id2ent, id2rel):
+    """
+    triples: list of triples
+    id2ent: dict, id to entity
+    id2rel: dict, id to relation
+    """
+    triples = [(id2ent[head], id2rel[rel], id2ent[tail]) for head, rel, tail in triples]
+    return triples

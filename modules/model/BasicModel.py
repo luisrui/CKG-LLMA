@@ -8,7 +8,7 @@ class BasicModel(nn.Module):
         super(BasicModel, self).__init__()
     
     def load_checkpoint(self, path, device):
-        self.load_state_dict(torch.load(os.path.join(path), map_location=device))
+        self.load_state_dict(torch.load(os.path.join('./checkpoint', path), map_location=device))
         self.eval()
 
     def save_checkpoint(self, path):

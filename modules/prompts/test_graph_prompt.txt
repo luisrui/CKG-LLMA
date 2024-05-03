@@ -1,0 +1,2 @@
+<s><<SYS>>Your role is to verify the knowledge graph triples based on a recommendation task setting, in the form of [head, relation, tail], on the name of their concept and the relations between head and tail entities.<s><<SYS>>
+We have triples of a knowledge graph: <<Triples>>. Based on your knowledge of concepts within entities(including users, items, item attributes), please verify the triples provided above. Don't restate the triples if you think they are correct. 

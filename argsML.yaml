@@ -1,7 +1,8 @@
-cuda: 3
+cuda: 7
 data:
       name: 'MovieLens1M'
 ### Training
+Train: True
 seed: 2024
 learning_rate : 0.001
 epoch : 500
@@ -20,11 +21,92 @@ hidden_embedding_dim : 256
 n_layers_lightgcn : 3
 loss_kge_weight : 0.5
 loss_reg_weight : 0.001
+#### Aggregator
+mess_dropout : [0.1, 0.1, 0.1]
+conv_dim_list : [64, 32, 16]
+aggregation_type : 'bi-interaction'
 
 ### Evaluation
-load_path : ''
+load_path : 'epoch_5_Model_MovieLens1M.ckpt'
 save_path : '/data/cairui/KG-LLM-REC/'
 eval_interval : 1
 save_interval : 5
 topks : [10, 20, 50]
 test_u_batch_size : 128
+
+
+
+ # def forward(self, edge_indexs, edge_types, users, items, neg_items):
+    #     ### KG Embedding Learning(only training the ent_embeddings_kge, and rel_embeddings)
+    #     x = self._forward_rgcn(self.ent_embeddings_kge.weight, edge_indexs, edge_types)        
+    #     #### the category of subgraphs are: uu, ui, ii]
+    #     # egde_index_uu, edge_index_ui, edge_index_ii = edge_indexs
+    #     # edge_type_uu, edge_type_ui, edge_type_ii = edge_types
+    #     # egde_index_uu, edge_type_uu = egde_index_uu.to(self.device), edge_type_uu.to(self.device)
+    #     # edge_index_ui, edge_type_ui = edge_index_ui.to(self.device), edge_type_ui.to(self.device)
+    #     # edge_index_ii, edge_type_ii = edge_index_ii.to(self.device), edge_type_ii.to(self.device)
+
+    #     merged_edge_index = torch.cat(edge_indexs, dim=1)
+    #     merged_edge_type = torch.cat(edge_types)
+    #     rels_for_reg = self.rel_embeddings(merged_edge_type.unique().to(self.device))
+
+    #     edge_attr = self.compute_attention('kg', merged_edge_index, merged_edge_type, len(edge_indexs[0]))
+    #     bpr_loss = self._calc_bpr_loss(merged_edge_index, edge_attr, users, items, neg_items)
+    #     edge_index_expand, edge_type_expand = self.Neg_Sampler.Triples_neg_sample(merged_edge_index, merged_edge_type)
+    #     edge_index_expand = edge_index_expand.to(self.device)
+    #     edge_type_expand = edge_type_expand.to(self.device)
+    
+    #     head = x[edge_index_expand[0].long()]
+    #     tail = x[edge_index_expand[1].long()]
+    #     rels = self.rel_embeddings(edge_type_expand)
+
+    #     pos_score, neg_score = self.KGEmodel(head, tail, rels, len(merged_edge_type))
+    #     #pos_score, neg_score = self.KGEmodel(head, tail, rels, edge_type_expand, len(merged_edge_type))
+    #     kge_loss = self.KGEloss(pos_score, neg_score)
+
+    #     ### Rate Prediction Training(only training the ui_embeddings)
+    #     user_embeddings, item_embeddings = self._forward_lightgcn(self.norm_adj, self.ui_embeddings.weight)
+
+    #     user_embs = F.embedding(users, user_embeddings)
+    #     item_embs = F.embedding(items - self.num_users, item_embeddings)
+    #     neg_item_embs = F.embedding(neg_items - self.num_users, item_embeddings)
+
+    #     ent_user_embs = self.ent_embeddings_kge(users)
+    #     ent_pos_item_embs = self.ent_embeddings_kge(items)
+    #     ent_neg_item_embs = self.ent_embeddings_kge(neg_items)
+
+    #     with torch.no_grad():
+    #         fused_user_embs = self._fusion(ent_user_embs, user_embs)
+    #     fused_pos_item_embs = self._fusion(ent_pos_item_embs, item_embs)
+    #     fused_neg_item_embs = self._fusion(ent_neg_item_embs, neg_item_embs)
+
+    #     # sup_pos_ratings = inner_product(fused_user_embs, fused_pos_item_embs)       # [batch_size]
+    #     # sup_neg_ratings = inner_product(fused_user_embs, fused_neg_item_embs)   # [batch_size]
+
+    #     sup_pos_ratings = inner_product(user_embs, fused_pos_item_embs)       # [batch_size]
+    #     sup_neg_ratings = inner_product(user_embs, fused_neg_item_embs)   # [batch_size]
+    #     sup_logits = sup_pos_ratings - sup_neg_ratings              # [batch_size]
+
+    #     bpr_loss = -torch.mean(F.logsigmoid(input=sup_logits))
+
+    #     # Reg Loss
+    #     # reg_loss = l2_loss(
+    #     #     fused_user_embs,
+    #     #     fused_pos_item_embs,
+    #     #     fused_neg_item_embs
+    #     # )
+    #     reg_loss = l2_loss(
+    #         user_embs,
+    #         rels_for_reg,
+    #         ent_user_embs,
+    #         fused_pos_item_embs,
+    #         fused_neg_item_embs
+    #     )
+        
+    #     total_loss = bpr_loss + self.reg_weight * reg_loss + self.kge_weight * kge_loss
+
+    #     with torch.no_grad():
+    #         self.fused_embeddings.weight.data[users] = fused_user_embs
+    #         self.fused_embeddings.weight.data[items] = fused_pos_item_embs
+
+    #     return total_loss, bpr_loss, kge_loss
