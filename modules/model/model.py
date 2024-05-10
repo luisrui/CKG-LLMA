@@ -101,22 +101,29 @@ class Model(BasicModel):
 
         ### Attention Design
         self.W_R = nn.Parameter(torch.Tensor(self.num_rel, args['ent_embedding_dim'], args['rel_embedding_dim']))
+        self.W_R_uu = nn.Parameter(torch.Tensor(self.num_rel, args['ent_embedding_dim'], args['rel_embedding_dim']))
+        self.W_R_ii = nn.Parameter(torch.Tensor(self.num_rel, args['ent_embedding_dim'], args['rel_embedding_dim']))
+        self.W_R_ui = nn.Parameter(torch.Tensor(self.num_rel, args['ent_embedding_dim'], args['rel_embedding_dim']))
+
         nn.init.xavier_uniform_(self.W_R, gain=nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.W_R_uu, gain=nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.W_R_ii, gain=nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.W_R_ui, gain=nn.init.calculate_gain('relu'))
 
         self.Neg_Sampler = NegativeSampler(args['data']['name'], kg, ent2id, rel2id, args['kg_neg_size'])
         self.KGEmodel = TransR(args['ent_embedding_dim'], args['rel_embedding_dim'], rel_num=self.num_rel)
         #self.KGEmodel = TransE()
         self.KGEloss = MarginLoss(margin=3.0)
-        self.conv_gcn1 = RGCNConv(in_channels=args['embedding_dim'], out_channels=args['hidden_embedding_dim'], num_relations=self.num_rel, num_bases=self.num_rel)
-        self.conv_gcn2 = RGCNConv(in_channels=args['hidden_embedding_dim'], out_channels=args['embedding_dim'], num_relations=self.num_rel, num_bases=self.num_rel)
+        # self.conv_gcn1 = RGCNConv(in_channels=args['embedding_dim'], out_channels=args['hidden_embedding_dim'], num_relations=self.num_rel, num_bases=self.num_rel)
+        # self.conv_gcn2 = RGCNConv(in_channels=args['hidden_embedding_dim'], out_channels=args['embedding_dim'], num_relations=self.num_rel, num_bases=self.num_rel)
         self.act_func = nn.LeakyReLU(negative_slope=0.2)
-        self.remap_layer = nn.Linear(args['embedding_dim'] * 3, args['embedding_dim'])
+        #self.remap_layer = nn.Linear(args['embedding_dim'] * 3, args['embedding_dim'])
         
-        self.fusion_mlp = nn.Sequential(
-            nn.Linear(args['embedding_dim'] * 2, args['embedding_dim']),
-            nn.ReLU(),
-            nn.Linear(args['embedding_dim'], args['embedding_dim'])
-        )
+        # self.fusion_mlp = nn.Sequential(
+        #     nn.Linear(args['embedding_dim'] * 2, args['embedding_dim']),
+        #     nn.ReLU(),
+        #     nn.Linear(args['embedding_dim'], args['embedding_dim'])
+        # )
 
         self.aggregator_layers = nn.ModuleList()
         for k in range(self.num_ag_layers):
@@ -125,14 +132,20 @@ class Model(BasicModel):
         #### Evaluation
         self.rate_act_fn = nn.Sigmoid()
     
-    def forward(self, edge_indexs, edge_types, users, items, neg_items):
-        ### KG Embedding Learning(only training the ent_embeddings_kge, and rel_embeddings)       
-        merged_edge_index = torch.cat(edge_indexs, dim=1)
-        merged_edge_type = torch.cat(edge_types)
-        merged_edge_index = merged_edge_index.to(self.device)
-        merged_edge_type = merged_edge_type.to(self.device)
+    def forward(self, graph_types, edge_indexs, edge_types, users, items, neg_items):
+        ### KG Embedding Learning(only training the ent_embeddings_kge, and rel_embeddings)
+        edge_attr = list()
+        for i in range(len(graph_types)):
+            graph_type = graph_types[i]
+            edge_index = edge_indexs[i].to(self.device)
+            edge_type = edge_types[i].to(self.device)
+            att_score = self.compute_attention(graph_type, edge_index, edge_type, len(edge_type))
+            edge_attr.append(att_score)
+        edge_attr = torch.cat(edge_attr, dim=0).to(self.device)
 
-        edge_attr = self.compute_attention('kg', merged_edge_index, merged_edge_type, len(merged_edge_type))
+        merged_edge_index = torch.cat(edge_indexs, dim=1).to(self.device)
+        merged_edge_type = torch.cat(edge_types).to(self.device)
+
         bpr_reg_loss, bpr_loss = self._calc_bpr_loss(merged_edge_index, edge_attr, users, items, neg_items)
         
         kge_reg_loss, kge_loss = self._calc_kge_loss(merged_edge_index, merged_edge_type)
@@ -141,9 +154,9 @@ class Model(BasicModel):
 
         return total_loss, bpr_loss, kge_loss
     
-    def att_score(self, graph_type, edge_index, edge_type, valid_id):
-        r_mul_h = torch.matmul(self.ent_embeddings_kge(edge_index[0][valid_id].long()), self.W_r)          
-        r_mul_t = torch.matmul(self.ent_embeddings_kge(edge_index[1][valid_id].long()), self.W_r)         
+    def att_score(self, edge_index, edge_type, valid_id):
+        r_mul_h = torch.matmul(self.ent_embeddings_kge(edge_index[0][valid_id].long()), self.W_r + self.W_r_type)          
+        r_mul_t = torch.matmul(self.ent_embeddings_kge(edge_index[1][valid_id].long()), self.W_r + self.W_r_type)         
         r_embed = self.rel_embeddings(edge_type[valid_id])                                             
         att = torch.bmm(r_mul_t.unsqueeze(1), torch.tanh(r_mul_h + r_embed).unsqueeze(2)).squeeze(-1)  
         return att
@@ -151,6 +164,7 @@ class Model(BasicModel):
     def compute_attention(self, graph_type, edge_index, edge_type, num_edge):
         sub_edge_id = torch.arange(num_edge).to(self.device)
         edge_attr = torch.zeros(len(sub_edge_id)).to(self.device)
+        weight_specific = self._get_type_weights(graph_type)
 
         for i in range(self.num_rel):
             mask = (edge_type == i)
@@ -158,7 +172,8 @@ class Model(BasicModel):
                 continue
             tar_edge_id = sub_edge_id[mask]
             self.W_r = self.W_R[i]  # [entity_dim, relation_ dim]
-            att = self.att_score(graph_type, edge_index, edge_type, tar_edge_id)
+            self.W_r_type = weight_specific[i]  # [entity_dim, relation_dim]
+            att = self.att_score(edge_index, edge_type, tar_edge_id)
             edge_attr[mask] = att.view(1, -1)
 
         edge_attr = edge_softmax(edge_index, edge_attr)
@@ -208,6 +223,16 @@ class Model(BasicModel):
         loss = kge_loss + self.reg_weight * kge_reg_loss
         return loss, kge_loss
 
+    def _get_type_weights(self, graph_type):
+        '''
+        Get the type weights for different graphs
+        '''
+        return {
+            'uu' : self.W_R_uu,
+            'ii' : self.W_R_ii,
+            'ui' : self.W_R_ui
+        }[graph_type]
+    
     def _forward_aggregator(self, x, edge_index, edge_attr):
         all_x = []
         for layer in self.aggregator_layers:
@@ -217,21 +242,21 @@ class Model(BasicModel):
         all_x = torch.cat(all_x, dim=-1)
         return all_x
 
-    def _forward_rgcn(self, x, edge_indexs, edge_types):
-        x_list = [] 
-        for edge_index, edge_type in zip(edge_indexs, edge_types):      
-            edge_index = edge_index.to(self.device)
-            edge_type = edge_type.to(self.device)
-            x = self.conv_gcn1(self.ent_embeddings_kge.weight, edge_index, edge_type)
-            x = self.act_func(x)
-            x = self.conv_gcn2(x, edge_index, edge_type)
-            x_list.append(x)        
+    # def _forward_rgcn(self, x, edge_indexs, edge_types):
+    #     x_list = [] 
+    #     for edge_index, edge_type in zip(edge_indexs, edge_types):      
+    #         edge_index = edge_index.to(self.device)
+    #         edge_type = edge_type.to(self.device)
+    #         x = self.conv_gcn1(self.ent_embeddings_kge.weight, edge_index, edge_type)
+    #         x = self.act_func(x)
+    #         x = self.conv_gcn2(x, edge_index, edge_type)
+    #         x_list.append(x)        
         
-        #Concatenation and Projection
-        x = torch.concat(x_list, dim=-1)
-        x = F.normalize(x, p=2, dim=1)
-        x = self.remap_layer(x)
-        return x
+    #     #Concatenation and Projection
+    #     x = torch.concat(x_list, dim=-1)
+    #     x = F.normalize(x, p=2, dim=1)
+    #     x = self.remap_layer(x)
+    #     return x
     
     def _forward_lightgcn(self, norm_adj, ego_embeddings):
         '''
@@ -251,25 +276,25 @@ class Model(BasicModel):
 
         return user_embeddings, item_embeddings
     
-    def _fusion(self, kge_embeddings, ui_embeddings):
-        ### MLP Fusion
-        # concat_embs = torch.cat((kge_embeddings, ui_embeddings), dim=-1)
-        # fused_embs = self.fusion_mlp(concat_embs)
-        # return fused_embs
+    # def _fusion(self, kge_embeddings, ui_embeddings):
+    #     ### MLP Fusion
+    #     # concat_embs = torch.cat((kge_embeddings, ui_embeddings), dim=-1)
+    #     # fused_embs = self.fusion_mlp(concat_embs)
+    #     # return fused_embs
 
-        ### Bi-directional Attention Fusion
-        query = kge_embeddings
-        key = ui_embeddings
+    #     ### Bi-directional Attention Fusion
+    #     query = kge_embeddings
+    #     key = ui_embeddings
 
-        scores = torch.bmm(query.unsqueeze(1), key.unsqueeze(-1)).squeeze(-1).squeeze(-1)  # (batch_size)
-        attn_weights = F.softmax(scores, dim=-1).unsqueeze(-1)  # (batch_size, 1)
-        kge_att_ui = attn_weights * kge_embeddings  # (batch_size, emb_dim)  
-        ui_att_kge = (1 - attn_weights) * ui_embeddings  # (batch_size, emb_dim)
+    #     scores = torch.bmm(query.unsqueeze(1), key.unsqueeze(-1)).squeeze(-1).squeeze(-1)  # (batch_size)
+    #     attn_weights = F.softmax(scores, dim=-1).unsqueeze(-1)  # (batch_size, 1)
+    #     kge_att_ui = attn_weights * kge_embeddings  # (batch_size, emb_dim)  
+    #     ui_att_kge = (1 - attn_weights) * ui_embeddings  # (batch_size, emb_dim)
         
-        fused_embs = torch.cat((kge_att_ui, ui_att_kge), dim=-1)  # (batch_size, 2*emb_dim)
-        fused_embs = self.fusion_mlp(fused_embs)  # (batch_size, emb_dim)
+    #     fused_embs = torch.cat((kge_att_ui, ui_att_kge), dim=-1)  # (batch_size, 2*emb_dim)
+    #     fused_embs = self.fusion_mlp(fused_embs)  # (batch_size, emb_dim)
         
-        return fused_embs
+    #     return fused_embs
         
     def getUsersRating(self, users):
         users_emb = self.ent_embeddings_kge(users)

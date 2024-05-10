@@ -9,7 +9,6 @@ from collections import deque
 from tqdm import trange
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
-
 if __name__ == "__main__":
     parse = argparse.ArgumentParser()
     parse.add_argument(
@@ -73,10 +72,11 @@ if __name__ == "__main__":
 
     if args['Train']:
         #Pretrain_KG_Embeddings(50, args, model, kg_data_loader, rec_data, optimizer, scheduler, device)
-        #TrainwithGraph(24, args, model, rec_data, optimizer, scheduler, device)
+        #TrainwithGraph(27, args, model, rec_data, optimizer, scheduler, device)
         #Train(args, model, kg_data_loader, rec_data, kg_data, extractor, optimizer, scheduler, device)
         #TrainLightGCN(args, model, kg_data_loader, rec_data, kg_data, extractor, optimizer, scheduler, device)
-        #result = Test(args, rec_data, model, "test", device)
-        Generate_subgraphs(50, kg_data_loader, extractor, rec_data)
+        #result = Test(args, rec_data, model, "test", device)s
+        Generate_subgraphs(50, args, kg_data_loader, extractor, rec_data)
+        #Prompt_Length_Test(50, 'Llama3', kg_data_loader, extractor, rec_data)
     else:
         result = Test(args, rec_data, model, "test", device)

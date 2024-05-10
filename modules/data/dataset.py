@@ -10,6 +10,7 @@ import json
 from collections import (defaultdict, Iterable, OrderedDict)
 from tqdm import tqdm
 from ..utils import sp_mat_to_sp_tensor
+from .data_config import data_config
 try:     
     from cppimport import imp_from_filepath
     from os.path import join, dirname
@@ -21,33 +22,6 @@ except Exception as e:
     print("Cpp extension not loaded")
     sample_ext = False
     
-data_config = {
-    'AmazonBook' : {
-        'user' : 'User_id',
-        'item' : 'Id',
-        'review' : 'review/text',
-        'num_users' : 70994,
-        'num_items' : 64117, 
-    },
-    'AmazonBookTiny' : {
-        'user' : 'User_id',
-        'item' : 'Id',
-        'review' : 'review/text',
-        'num_users' : 12634,
-        'num_items' : 12568, 
-    },
-    'Yelp' : {
-        'user' : 'xxx',
-        'item' : 'xx'
-    },
-    'MovieLens1M' : {
-        'user' : 'User',
-        'item' : 'Item', 
-        'review' : 'Review',
-        'num_users' : 943,
-        'num_items' : 1675,
-    }
-}
 class KGRecDataset(torch_geometric.data.Dataset):
     '''
     The dataset constructs graph nodes for background knowledge search and subgraph sampler. 'self.u_of_i' is for training, and 'self.u_of_i_all' is for all training, valid, and test. It servers for sampling.

@@ -4,8 +4,10 @@ import numpy as np
 import pickle
 from tqdm import tqdm
 from collections import deque, defaultdict
+from vllm import LLM, SamplingParams
 from tqdm import trange
-from ..utils import triples_transfer_to_graph
+from ..data import LLM_import_path
+from ..utils import triples_transfer_to_graph, Read_prompt
 from .test import Test
 
 
@@ -55,7 +57,6 @@ def Train(args, model, data_loader, rec_data, kg_data, extractor, optimizer, sch
         elif e % args["eval_interval"] == 0:
             result = Test(args, rec_data,  model, "valid", device)
 
-
 def TrainLightGCN(args, model, data_loader, rec_data, kg_data, extractor, optimizer, scheduler, device):
     steps_per_epoch = len(data_loader)
     losses = deque([], steps_per_epoch)
@@ -97,7 +98,7 @@ def TrainwithGraph(total_epoch, args, model, rec_data, optimizer, scheduler, dev
 
     start_time = time.time()
     print(f'Loading saved graphs for {rec_data.name}...')
-    graphs_info = pickle.load(open(f'./saved_graphs/{rec_data.name}_e{total_epoch-1}.pkl', 'rb'))
+    graphs_info = pickle.load(open(f'./saved_graphs/{rec_data.name}_{args["batch_size"]}_{args["max_sample_neighbors"]}_e{total_epoch-1}.pkl', 'rb'))
     end_time = time.time()
     print(f'Loaded {total_epoch} epochs of graphs, time is {end_time - start_time} seconds.')
 
@@ -124,7 +125,7 @@ def TrainwithGraph(total_epoch, args, model, rec_data, optimizer, scheduler, dev
             neg_items = neg_items.to(device)
 
             loss, bpr_loss, kge_loss = model(
-                edge_indexs, edge_types, users, pos_items, neg_items
+                ['uu', 'ui', 'ii'], edge_indexs, edge_types, users, pos_items, neg_items
             )
 
             optimizer.zero_grad()
@@ -151,21 +152,22 @@ def TrainwithGraph(total_epoch, args, model, rec_data, optimizer, scheduler, dev
         elif (e + 1) % args["eval_interval"] == 0:
             result = Test(args, rec_data,  model, "valid", device)
 
-def Generate_subgraphs(epochs, data_loader, extractor, rec_data):
+def Generate_subgraphs(epochs, args, data_loader, extractor, rec_data):
     '''
     Generate subgraphs for training.
     '''
     subgraphs_collect = dict()
 
-    for e in tqdm(range(epochs)):
+    for e in tqdm(range(args['start_epoch'], epochs)):
 
         epoch_info = defaultdict(list)
         
-        for users, pos_items, reviews in tqdm(data_loader):
+        for users, pos_items, _ in tqdm(data_loader):
             neg_items = rec_data.negative_sample(users, pos_items)
             subgraphs = extractor.sample_subgraph(
                 ["uu", "ui", "ii"], users, pos_items, neg_items
             )
+            print(subgraphs[0].__len__(), subgraphs[1].__len__(), subgraphs[2].__len__())
             epoch_info['uu'].append(subgraphs[0])
             epoch_info['ui'].append(subgraphs[1])
             epoch_info['ii'].append(subgraphs[2])
@@ -175,7 +177,7 @@ def Generate_subgraphs(epochs, data_loader, extractor, rec_data):
 
         subgraphs_collect[e] = epoch_info
 
-        with open(f'./saved_graphs/{rec_data.name}_e{e}_v3.pkl', 'wb') as f:
+        with open(f'./saved_graphs/{rec_data.name}_{args["batch_size"]}_{args["max_sample_neighbors"]}_e{e}_v2.pkl', 'wb') as f:
             pickle.dump(subgraphs_collect, f)
 
 def Pretrain_KG_Embeddings(total_epoch, args, model, data_loader, rec_data, optimizer, scheduler, device):
@@ -183,7 +185,7 @@ def Pretrain_KG_Embeddings(total_epoch, args, model, data_loader, rec_data, opti
     losses = deque([], steps_per_epoch)
     losses_kge = deque([], steps_per_epoch)
     epoch_counter = trange(args["start_epoch"], total_epoch, ncols=0)
-    subgraphs_collect = pickle.load(open(f'./saved_graphs/{rec_data.name}_e{total_epoch-1}.pkl', 'rb'))
+    subgraphs_collect = pickle.load(open(f'./saved_graphs/{rec_data.name}_{args["batch_size"]}_{args["max_sample_neighbors"]}_e{total_epoch-1}.pkl', 'rb'))
 
     for e in epoch_counter:
         for users, pos_items, reviews in data_loader:
@@ -221,3 +223,6 @@ def Pretrain_KG_Embeddings(total_epoch, args, model, data_loader, rec_data, opti
             result = Test(args, rec_data,  model, "valid", device)
         elif e % args["eval_interval"] == 0:
             result = Test(args, rec_data,  model, "valid", device)
+
+
+            

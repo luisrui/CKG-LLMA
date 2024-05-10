@@ -2,7 +2,9 @@ import yaml
 import torch
 import random
 import numpy as np
+import json
 
+from collections import defaultdict
 from torch_scatter import scatter_sum, scatter_max
 
 def read_yaml(path):
@@ -119,11 +121,58 @@ def NDCGatK_r(test_data,r,k):
     ndcg[np.isnan(ndcg)] = 0.
     return np.sum(ndcg)
 
-def GraphTranslate(triples, id2ent, id2rel):
+def Translate_triple2text(triples, id2ent, id2rel):
     """
     triples: list of triples
     id2ent: dict, id to entity
     id2rel: dict, id to relation
     """
-    triples = [(id2ent[head], id2rel[rel], id2ent[tail]) for head, rel, tail in triples]
-    return triples
+    triples_text = str([(id2ent[head], id2rel[rel], id2ent[tail]) for head, rel, tail in triples])
+    triples_text = triples_text.replace(', ', ',')
+    return triples_text
+
+def Translate_modify2id(modify_json, ent2id, rel2id):
+    delete_list = modify_json['delete']
+    try:
+        delete_list_id = [(ent2id[head], rel2id[rel], ent2id[tail]) for head, rel, tail in delete_list]
+    except:
+        delete_list_id = []
+        for triple in delete_list:
+            try:
+                head, rel, tail = triple
+                delete_list_id.append((ent2id[head], rel2id[rel], ent2id[tail]))
+            except:
+                delete_list_id.append(triple)
+
+    add_list = modify_json['add']
+    try:
+        add_list_id = [(ent2id[head], rel2id[rel], ent2id[tail]) for head, rel, tail in add_list]
+    except:
+        add_list_id = []
+        for triple in add_list:
+            try:
+                head, rel, tail = triple
+                add_list_id.append((ent2id[head], rel2id[rel], ent2id[tail]))
+            except:
+                add_list_id.append(triple)
+    
+    return {
+        'delete': delete_list_id,
+        'add': add_list_id
+    }
+    
+
+def Read_prompt(initial_query : str, pos_items, neg_items, id2ent : dict, id2rel : dict, selected_triples : list):
+    '''
+    Generate graph prompts based on kg triples and logics.
+    '''
+    triples_text = Translate_triple2text(selected_triples, id2ent, id2rel)
+
+    items = np.concatenate([pos_items, neg_items], axis=0)
+    items = np.unique(items)
+    id2name = json.load(open('./dataset/MovieLens1M/id2name.json', 'r'))
+    items_title = {id2ent[item]:id2name[id2ent[item]] for item in items}
+    items_title_text = str(items_title).replace(': ', ':').replace(', ',',')
+    
+    graph_prompt = initial_query.replace("<<Triples>>", triples_text).replace("<<TITLE_NAMES>>", items_title_text)
+    return graph_prompt

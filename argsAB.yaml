@@ -6,7 +6,7 @@ seed: 2024
 learning_rate : 0.001
 epoch : 100
 start_epoch : 0
-batch_size : 256
+batch_size : 16
 
 ### Model Setting
 kg_neg_size : 100

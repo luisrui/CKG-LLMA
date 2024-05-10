@@ -1,5 +1,6 @@
-cuda: 7
+cuda: 0
 data:
+      path: './dataset'
       name: 'MovieLens1M'
 ### Training
 Train: True
@@ -7,12 +8,12 @@ seed: 2024
 learning_rate : 0.001
 epoch : 500
 start_epoch : 0
-batch_size : 32
+batch_size : 10
 
 ### Model Setting
 isPretrain : 0
 kg_neg_size : 100
-max_sample_neighbors : 3
+max_sample_neighbors : 2
 dataloader_n_workers : 8
 embedding_dim : 64
 ent_embedding_dim : 64
@@ -27,7 +28,7 @@ conv_dim_list : [64, 32, 16]
 aggregation_type : 'bi-interaction'
 
 ### Evaluation
-load_path : 'epoch_5_Model_MovieLens1M.ckpt'
+load_path : ''
 save_path : '/data/cairui/KG-LLM-REC/'
 eval_interval : 1
 save_interval : 5
