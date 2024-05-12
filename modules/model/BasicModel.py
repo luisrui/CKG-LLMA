@@ -46,4 +46,4 @@ class BasicModel(nn.Module):
         for i in parameters:
             parameters[i] = torch.Tensor(parameters[i])
         self.load_state_dict(parameters, strict = False)
-        self.eval()    
+        self.eval()

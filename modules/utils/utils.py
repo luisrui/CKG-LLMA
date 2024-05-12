@@ -5,7 +5,7 @@ import numpy as np
 import json
 
 from collections import defaultdict
-from torch_scatter import scatter_sum, scatter_max
+from torch_scatter import scatter_sum
 
 def read_yaml(path):
     file = open(path, "r", encoding="utf-8")
@@ -30,18 +30,21 @@ def triples_transfer_to_graph(subgraphs: list):
     edge_type_list = []
 
     for subgraph in subgraphs:
-        heads, rels, tails = zip(*subgraph)
+        if len(subgraph) != 0:
+            heads, rels, tails = zip(*subgraph)
 
-        heads = np.array(heads)
-        tails = np.array(tails)
-        rels = np.array(rels)
+            heads = np.array(heads)
+            tails = np.array(tails)
+            rels = np.array(rels)
 
-        edge_index_sub = np.stack((heads, tails), axis=0)
-        edge_index_sub = torch.from_numpy(edge_index_sub).long()
-        edge_type_sub = torch.from_numpy(rels).long()
+            edge_index_sub = np.stack((heads, tails), axis=0)
+            edge_index_sub = torch.from_numpy(edge_index_sub).long()
+            edge_type_sub = torch.from_numpy(rels).long()
 
-        edge_index_list.append(edge_index_sub)
-        edge_type_list.append(edge_type_sub)
+            edge_index_list.append(edge_index_sub)
+            edge_type_list.append(edge_type_sub)
+        else:
+            raise 'Problem in subgraph!'
 
     return edge_index_list, edge_type_list
 
@@ -176,3 +179,34 @@ def Read_prompt(initial_query : str, pos_items, neg_items, id2ent : dict, id2rel
     
     graph_prompt = initial_query.replace("<<Triples>>", triples_text).replace("<<TITLE_NAMES>>", items_title_text)
     return graph_prompt
+
+def Aug_graph(triples, num_users, num_items, ent2id, rel2id, aug_ratio, aug_type):
+    """
+    Augment the graph by adding negative samples.
+    """
+    triples = np.array(triples, dtype=int)
+    if aug_type == 'node':
+        item_attrs_startid = num_users + num_items
+        item_attrs_ids = [i for i in range(item_attrs_startid, len(ent2id))]
+        drop_item_attrs = np.random.choice(item_attrs_ids, size=int(len(item_attrs_ids) * aug_ratio), replace=False)
+
+        augmented_triples = []
+        for triple in triples:
+            if not any(node_id in drop_item_attrs for node_id in triple):
+                augmented_triples.append(triple)
+        
+        return augmented_triples
+    elif aug_type == 'edge':
+        augmented_triples = []   
+        num_triples = len(triples)
+        
+        drop_mask = np.random.rand(num_triples) < aug_ratio
+        liked_mask = triples[:, 1] == rel2id['liked']
+        
+        final_drop_mask = np.logical_and(drop_mask, liked_mask)
+        augmented_triples = triples[~final_drop_mask]
+        
+        return augmented_triples
+
+    
+    

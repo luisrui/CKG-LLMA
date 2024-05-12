@@ -75,6 +75,8 @@ class Model(BasicModel):
         self.n_layers = args['n_layers_lightgcn']
         self.kge_weight = args['loss_kge_weight']
         self.reg_weight = args['loss_reg_weight']
+        self.con_weight = args['loss_con_weight']
+        self.con_temp = args['con_temperature']
         self.num_ag_layers = len(args['conv_dim_list'])
         self.conv_dim_list = [args['ent_embedding_dim']] + args['conv_dim_list']
         self.mess_dropout = args['mess_dropout']
@@ -132,7 +134,7 @@ class Model(BasicModel):
         #### Evaluation
         self.rate_act_fn = nn.Sigmoid()
     
-    def forward(self, graph_types, edge_indexs, edge_types, users, items, neg_items):
+    def forward(self, graph_types, edge_indexs, edge_types, eh_g_types, eh_edge_idxs, eh_edge_types, users, items, neg_items):
         ### KG Embedding Learning(only training the ent_embeddings_kge, and rel_embeddings)
         edge_attr = list()
         for i in range(len(graph_types)):
@@ -142,17 +144,38 @@ class Model(BasicModel):
             att_score = self.compute_attention(graph_type, edge_index, edge_type, len(edge_type))
             edge_attr.append(att_score)
         edge_attr = torch.cat(edge_attr, dim=0).to(self.device)
+        
+        # if len(eh_edge_types) != 0:
+        #     eh_edge_attr = list()
+        #     for i in range(len(eh_g_types)):
+        #         eh_g_type = eh_g_types[i]
+        #         eh_edge_idx = eh_edge_idxs[i].to(self.device)
+        #         eh_edge_type = eh_edge_types[i].to(self.device)
+        #         att_score = self.compute_attention(eh_g_type, eh_edge_idx, eh_edge_type, len(eh_edge_type))
+        #         eh_edge_attr.append(att_score)
+        #     eh_edge_attr = torch.cat(eh_edge_attr, dim=0).to(self.device)
+        # else:
+        #     eh_edge_attr = torch.tensor([])
+        eh_edge_attr = list()
+        for i in range(len(eh_g_types)):
+            eh_g_type = eh_g_types[i]
+            eh_edge_idx = eh_edge_idxs[i].to(self.device)
+            eh_edge_type = eh_edge_types[i].to(self.device)
+            att_score = self.compute_attention(eh_g_type, eh_edge_idx, eh_edge_type, len(eh_edge_type))
+            eh_edge_attr.append(att_score)
+        eh_edge_attr = torch.cat(eh_edge_attr, dim=0).to(self.device)
 
         merged_edge_index = torch.cat(edge_indexs, dim=1).to(self.device)
+        merged_eh_edge_index = torch.cat(eh_edge_idxs, dim=1).to(self.device)
         merged_edge_type = torch.cat(edge_types).to(self.device)
 
-        bpr_reg_loss, bpr_loss = self._calc_bpr_loss(merged_edge_index, edge_attr, users, items, neg_items)
+        bpr_reg_loss, bpr_loss, con_loss = self._calc_bpr_loss(merged_edge_index, edge_attr, merged_eh_edge_index, eh_edge_attr, users, items, neg_items)
         
         kge_reg_loss, kge_loss = self._calc_kge_loss(merged_edge_index, merged_edge_type)
 
-        total_loss = bpr_reg_loss + self.kge_weight * kge_reg_loss
+        total_loss = bpr_reg_loss + self.kge_weight * kge_reg_loss + self.con_weight * con_loss
 
-        return total_loss, bpr_loss, kge_loss
+        return total_loss, bpr_loss, kge_loss, con_loss
     
     def att_score(self, edge_index, edge_type, valid_id):
         r_mul_h = torch.matmul(self.ent_embeddings_kge(edge_index[0][valid_id].long()), self.W_r + self.W_r_type)          
@@ -175,21 +198,40 @@ class Model(BasicModel):
             self.W_r_type = weight_specific[i]  # [entity_dim, relation_dim]
             att = self.att_score(edge_index, edge_type, tar_edge_id)
             edge_attr[mask] = att.view(1, -1)
-
+        
         edge_attr = edge_softmax(edge_index, edge_attr)
 
         return edge_attr
     
-    def _calc_bpr_loss(self, edge_index, edge_attr, users, items, neg_items):
+    def _calc_bpr_loss(self, edge_index, edge_attr, eh_edge_index, eh_egde_attr, users, items, neg_items):
         x = self._forward_aggregator(self.ent_embeddings_kge.weight, edge_index, edge_attr)                
-        
+
         user_embs = x[users]               
         pos_item_embs = x[items]       
         neg_item_embs = x[neg_items]       
 
-        sup_pos_ratings = inner_product(user_embs, pos_item_embs)       # [batch_size]
-        sup_neg_ratings = inner_product(user_embs, neg_item_embs)   # [batch_size]
-        sup_logits = sup_pos_ratings - sup_neg_ratings
+        if eh_egde_attr.shape[0] != 0:
+            x_enhanced = self._forward_aggregator(self.ent_embeddings_kge.weight, eh_edge_index, eh_egde_attr)
+
+            eh_user_embs = x_enhanced[users]
+            eh_item_embs = x_enhanced[items]
+
+            pos_ratings_user = inner_product(user_embs, eh_user_embs)  
+            pos_ratings_item = inner_product(pos_item_embs, eh_item_embs)   
+            tot_ratings_user = torch.matmul(user_embs, eh_user_embs.T)
+            tot_ratings_item = torch.matmul(pos_item_embs, eh_item_embs.T)
+            ssl_logits_user = tot_ratings_user - pos_ratings_user[:, None] 
+            ssl_logits_item = tot_ratings_item - pos_ratings_item[:, None]
+
+            sup_pos_ratings = inner_product(user_embs, pos_item_embs)       
+            sup_neg_ratings = inner_product(user_embs, neg_item_embs)  
+            sup_logits = sup_pos_ratings - sup_neg_ratings
+
+            clogits_user = torch.logsumexp(ssl_logits_user / self.con_temp, dim=1)
+            clogits_item = torch.logsumexp(ssl_logits_item / self.con_temp, dim=1)
+            con_loss = torch.sum(clogits_user + clogits_item)
+        else:
+            con_loss = 0.0
 
         bpr_loss = -torch.mean(F.logsigmoid(sup_logits))
 
@@ -200,7 +242,7 @@ class Model(BasicModel):
         )
         
         loss = bpr_loss + self.reg_weight * bpr_reg_loss
-        return loss, bpr_loss
+        return loss, bpr_loss, con_loss
     
     def _calc_kge_loss(self, edge_index, edge_type):
         edge_index_expand, edge_type_expand = self.Neg_Sampler.Triples_neg_sample(edge_index, edge_type)
@@ -318,9 +360,16 @@ class Model(BasicModel):
         #pos_score, neg_score = self.KGEmodel(head, tail, rels, edge_type_expand, len(merged_edge_type))
         kge_loss = self.KGEloss(pos_score, neg_score)
         reg_loss = l2_loss(
-            head,
-            tail,
-            rels
-        )
+                        head,
+                        tail,
+                        rels
+                    )
         loss = kge_loss + self.reg_weight * reg_loss
         return loss, kge_loss
+    
+    def generate_entity_relation_embeddings(self, save_path):
+        import os
+        ent_embs = self.ent_embeddings_kge.weight.cpu().detach().numpy()
+        rel_embs = self.rel_embeddings.weight.cpu().detach().numpy()
+        np.savez(os.path.join(save_path, 'ent_rel_embs.npz'), ent_embs=ent_embs, rel_embs=rel_embs)
+

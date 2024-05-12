@@ -102,30 +102,50 @@ def TrainwithGraph(total_epoch, args, model, rec_data, optimizer, scheduler, dev
     end_time = time.time()
     print(f'Loaded {total_epoch} epochs of graphs, time is {end_time - start_time} seconds.')
 
+    start_time = time.time()
+    print(f'Loading enhanced graphs for {rec_data.name}...')
+    enhanced_info = pickle.load(open(f'./saved_graphs/{rec_data.name}_{args["batch_size"]}_{args["max_sample_neighbors"]}_e{total_epoch-1}_enhanced_{args["start_step"]}_{args["end_step"]}.pkl', 'rb'))
+    end_time = time.time()
+    print(f'Loaded {total_epoch} epochs of enhanced graphs, time is {end_time - start_time} seconds.')
+
     steps_per_epoch = len(graphs_info[0]['users'])
     losses = deque([], steps_per_epoch)
     losses_bpr = deque([], steps_per_epoch)
     losses_kge = deque([], steps_per_epoch)
+    losses_con = deque([], steps_per_epoch)
     
     for e in epoch_counter:
         epoch_info = graphs_info[e]
         users_epoch, pos_items_epoch, neg_items_epoch = epoch_info['users'], epoch_info['pos_items'], epoch_info['neg_items']
         uu_graphs, ui_graphs, ii_graphs = epoch_info['uu'], epoch_info['ui'], epoch_info['ii']
+        ui_enhanced_graphs, ii_enhanced_graphs = enhanced_info[e]['ui'], enhanced_info[e]['ii']
+        step = 0
         for (users, 
              pos_items,
              neg_items,
              uu_graph,
              ui_graph,
-             ii_graph) in zip(users_epoch, pos_items_epoch, neg_items_epoch, uu_graphs, ui_graphs, ii_graphs):
+             ii_graph,
+             eh_ui_graph,
+             eh_ii_graph) in zip(users_epoch, pos_items_epoch, neg_items_epoch, uu_graphs, ui_graphs, ii_graphs, ui_enhanced_graphs, ii_enhanced_graphs):
             
             edge_indexs, edge_types = triples_transfer_to_graph([uu_graph, ui_graph, ii_graph])
+            eh_edge_indexs, eh_edge_types = triples_transfer_to_graph([eh_ui_graph, eh_ii_graph])
 
             users = users.to(device)
             pos_items = pos_items.to(device)
             neg_items = neg_items.to(device)
 
-            loss, bpr_loss, kge_loss = model(
-                ['uu', 'ui', 'ii'], edge_indexs, edge_types, users, pos_items, neg_items
+            loss, bpr_loss, kge_loss, con_loss = model(
+                ['uu', 'ui', 'ii'], 
+                edge_indexs, 
+                edge_types,
+                ['ui', 'ii'],
+                eh_edge_indexs, 
+                eh_edge_types, 
+                users, 
+                pos_items, 
+                neg_items
             )
 
             optimizer.zero_grad()
@@ -135,10 +155,12 @@ def TrainwithGraph(total_epoch, args, model, rec_data, optimizer, scheduler, dev
             losses.append(loss.item())
             losses_bpr.append(bpr_loss.item())
             losses_kge.append(kge_loss.item())
+            losses_con.append(con_loss.item())
             epoch_counter.set_description(
-                "Epoch %d |loss: %.6f |bpr_loss: %.6f |kge_loss: %.6f"
-                % (e + 1, np.mean(losses), np.mean(losses_bpr), np.mean(losses_kge))
+                "Epoch %d |step %d |loss: %.6f |bpr_loss: %.6f |kge_loss: %.6f|con_loss: %.6f"
+                % (e + 1, step, np.mean(losses), np.mean(losses_bpr), np.mean(losses_kge), np.mean(losses_con))
             )
+            step += 1
         if scheduler:
             scheduler.step()
 

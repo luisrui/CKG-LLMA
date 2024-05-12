@@ -1,4 +1,4 @@
-cuda: 0
+cuda: 6
 data:
       path: './dataset'
       name: 'MovieLens1M'
@@ -9,7 +9,6 @@ learning_rate : 0.001
 epoch : 500
 start_epoch : 0
 batch_size : 10
-
 ### Model Setting
 isPretrain : 0
 kg_neg_size : 100
@@ -26,9 +25,13 @@ loss_reg_weight : 0.001
 mess_dropout : [0.1, 0.1, 0.1]
 conv_dim_list : [64, 32, 16]
 aggregation_type : 'bi-interaction'
-
+#### Constrastive Learning
+start_step : 0
+end_step : 1600
+con_temperature : 0.2
+loss_con_weight : 0.1
 ### Evaluation
-load_path : ''
+load_path : '/data/cairui/KG-LLM-REC/checkpoint/epoch_25_Model_MovieLens1M.ckpt'
 save_path : '/data/cairui/KG-LLM-REC/'
 eval_interval : 1
 save_interval : 5
