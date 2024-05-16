@@ -281,8 +281,15 @@ class RecTrainDataset(torch.utils.data.Dataset):
         else:
             raise ValueError('Invalid mode. Please choose from "valid" or "test".')
     
-    def get_all_pos(self, users):
+    def get_pos(self, users):
         posItems = [self.u_of_i[user] for user in users]
+        return posItems
+    
+    def get_test_pos(self, users, mode):
+        if mode == 'valid':
+            posItems = [self.wrapped_valid_set[user] for user in users]
+        elif mode == 'test':
+            posItems = [self.wrapped_test_set[user] for user in users]
         return posItems
 
 class Sampler(object):

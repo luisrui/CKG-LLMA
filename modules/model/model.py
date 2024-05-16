@@ -9,7 +9,7 @@ import scipy.sparse as sp
 
 
 from ..data import data_config, NegativeSampler
-from ..utils import (inner_product, l2_loss, MarginLoss, edge_softmax)
+from ..utils import (inner_product, BPRLoss, EmbLoss, MarginLoss, edge_softmax)
 
 from .BasicModel import BasicModel
 from .KGEmb import *
@@ -72,7 +72,7 @@ class Model(BasicModel):
         self.num_rel = len(rel2id)
         self.device = device
 
-        self.n_layers = args['n_layers_lightgcn']
+        # self.n_layers = args['n_layers_lightgcn']
         self.kge_weight = args['loss_kge_weight']
         self.reg_weight = args['loss_reg_weight']
         self.con_weight = args['loss_con_weight']
@@ -118,14 +118,9 @@ class Model(BasicModel):
         self.KGEloss = MarginLoss(margin=3.0)
         # self.conv_gcn1 = RGCNConv(in_channels=args['embedding_dim'], out_channels=args['hidden_embedding_dim'], num_relations=self.num_rel, num_bases=self.num_rel)
         # self.conv_gcn2 = RGCNConv(in_channels=args['hidden_embedding_dim'], out_channels=args['embedding_dim'], num_relations=self.num_rel, num_bases=self.num_rel)
+        self.mf_loss = BPRLoss()
+        self.reg_loss = EmbLoss()
         self.act_func = nn.LeakyReLU(negative_slope=0.2)
-        #self.remap_layer = nn.Linear(args['embedding_dim'] * 3, args['embedding_dim'])
-        
-        # self.fusion_mlp = nn.Sequential(
-        #     nn.Linear(args['embedding_dim'] * 2, args['embedding_dim']),
-        #     nn.ReLU(),
-        #     nn.Linear(args['embedding_dim'], args['embedding_dim'])
-        # )
 
         self.aggregator_layers = nn.ModuleList()
         for k in range(self.num_ag_layers):
@@ -144,18 +139,7 @@ class Model(BasicModel):
             att_score = self.compute_attention(graph_type, edge_index, edge_type, len(edge_type))
             edge_attr.append(att_score)
         edge_attr = torch.cat(edge_attr, dim=0).to(self.device)
-        
-        # if len(eh_edge_types) != 0:
-        #     eh_edge_attr = list()
-        #     for i in range(len(eh_g_types)):
-        #         eh_g_type = eh_g_types[i]
-        #         eh_edge_idx = eh_edge_idxs[i].to(self.device)
-        #         eh_edge_type = eh_edge_types[i].to(self.device)
-        #         att_score = self.compute_attention(eh_g_type, eh_edge_idx, eh_edge_type, len(eh_edge_type))
-        #         eh_edge_attr.append(att_score)
-        #     eh_edge_attr = torch.cat(eh_edge_attr, dim=0).to(self.device)
-        # else:
-        #     eh_edge_attr = torch.tensor([])
+
         eh_edge_attr = list()
         for i in range(len(eh_g_types)):
             eh_g_type = eh_g_types[i]
@@ -210,6 +194,9 @@ class Model(BasicModel):
         pos_item_embs = x[items]       
         neg_item_embs = x[neg_items]       
 
+        sup_pos_ratings = inner_product(user_embs, pos_item_embs)       
+        sup_neg_ratings = inner_product(user_embs, neg_item_embs)  
+        
         if eh_egde_attr.shape[0] != 0:
             x_enhanced = self._forward_aggregator(self.ent_embeddings_kge.weight, eh_edge_index, eh_egde_attr)
 
@@ -223,22 +210,21 @@ class Model(BasicModel):
             ssl_logits_user = tot_ratings_user - pos_ratings_user[:, None] 
             ssl_logits_item = tot_ratings_item - pos_ratings_item[:, None]
 
-            sup_pos_ratings = inner_product(user_embs, pos_item_embs)       
-            sup_neg_ratings = inner_product(user_embs, neg_item_embs)  
-            sup_logits = sup_pos_ratings - sup_neg_ratings
-
             clogits_user = torch.logsumexp(ssl_logits_user / self.con_temp, dim=1)
             clogits_item = torch.logsumexp(ssl_logits_item / self.con_temp, dim=1)
             con_loss = torch.sum(clogits_user + clogits_item)
         else:
             con_loss = 0.0
 
-        bpr_loss = -torch.mean(F.logsigmoid(sup_logits))
+        bpr_loss = self.mf_loss(sup_pos_ratings, sup_neg_ratings)
 
-        bpr_reg_loss = l2_loss(
+        bpr_reg_loss = self.reg_loss(
             user_embs,
             pos_item_embs,
-            neg_item_embs
+            neg_item_embs,
+            eh_user_embs,
+            eh_item_embs,
+            require_pow=True
         )
         
         loss = bpr_loss + self.reg_weight * bpr_reg_loss
@@ -257,10 +243,11 @@ class Model(BasicModel):
         pos_score, neg_score = self.KGEmodel(head_embs, tail_embs, rels_embs, edge_type_expand, len(edge_type), self.W_R)
         kge_loss = self.KGEloss(pos_score, neg_score)
 
-        kge_reg_loss = l2_loss(
+        kge_reg_loss = self.reg_loss(
             head_embs,
             tail_embs,
-            rels_embs
+            rels_embs,
+            require_pow=True
         )
         loss = kge_loss + self.reg_weight * kge_reg_loss
         return loss, kge_loss
@@ -284,22 +271,6 @@ class Model(BasicModel):
         all_x = torch.cat(all_x, dim=-1)
         return all_x
 
-    # def _forward_rgcn(self, x, edge_indexs, edge_types):
-    #     x_list = [] 
-    #     for edge_index, edge_type in zip(edge_indexs, edge_types):      
-    #         edge_index = edge_index.to(self.device)
-    #         edge_type = edge_type.to(self.device)
-    #         x = self.conv_gcn1(self.ent_embeddings_kge.weight, edge_index, edge_type)
-    #         x = self.act_func(x)
-    #         x = self.conv_gcn2(x, edge_index, edge_type)
-    #         x_list.append(x)        
-        
-    #     #Concatenation and Projection
-    #     x = torch.concat(x_list, dim=-1)
-    #     x = F.normalize(x, p=2, dim=1)
-    #     x = self.remap_layer(x)
-    #     return x
-    
     def _forward_lightgcn(self, norm_adj, ego_embeddings):
         '''
         Forward pass of LightGCN(Learning the ui embeddings)
@@ -317,55 +288,36 @@ class Model(BasicModel):
         user_embeddings, item_embeddings = torch.split(all_embeddings, [self.num_users, self.num_items], dim=0)
 
         return user_embeddings, item_embeddings
-    
-    # def _fusion(self, kge_embeddings, ui_embeddings):
-    #     ### MLP Fusion
-    #     # concat_embs = torch.cat((kge_embeddings, ui_embeddings), dim=-1)
-    #     # fused_embs = self.fusion_mlp(concat_embs)
-    #     # return fused_embs
-
-    #     ### Bi-directional Attention Fusion
-    #     query = kge_embeddings
-    #     key = ui_embeddings
-
-    #     scores = torch.bmm(query.unsqueeze(1), key.unsqueeze(-1)).squeeze(-1).squeeze(-1)  # (batch_size)
-    #     attn_weights = F.softmax(scores, dim=-1).unsqueeze(-1)  # (batch_size, 1)
-    #     kge_att_ui = attn_weights * kge_embeddings  # (batch_size, emb_dim)  
-    #     ui_att_kge = (1 - attn_weights) * ui_embeddings  # (batch_size, emb_dim)
-        
-    #     fused_embs = torch.cat((kge_att_ui, ui_att_kge), dim=-1)  # (batch_size, 2*emb_dim)
-    #     fused_embs = self.fusion_mlp(fused_embs)  # (batch_size, emb_dim)
-        
-    #     return fused_embs
-        
+ 
     def getUsersRating(self, users):
         users_emb = self.ent_embeddings_kge(users)
         items_emb = self.ent_embeddings_kge.weight[self.num_users : self.num_users + self.num_items]
-        rating = self.rate_act_fn(torch.matmul(users_emb, items_emb.T))
+        #rating = self.rate_act_fn(torch.matmul(users_emb, items_emb.T))
+        rating = torch.matmul(users_emb, items_emb.T)
         return rating
     
-    def pretrain_kg_embeddings(self, edge_indexs, edge_types):
-        merged_edge_index = torch.cat(edge_indexs, dim=1)
-        merged_edge_type = torch.cat(edge_types)
-        rels_for_reg = self.rel_embeddings(merged_edge_type.unique().to(self.device))
-        edge_index_expand, edge_type_expand = self.Neg_Sampler.Triples_neg_sample(merged_edge_index, merged_edge_type)
-        edge_index_expand = edge_index_expand.to(self.device)
-        edge_type_expand = edge_type_expand.to(self.device)
+    # def pretrain_kg_embeddings(self, edge_indexs, edge_types):
+    #     merged_edge_index = torch.cat(edge_indexs, dim=1)
+    #     merged_edge_type = torch.cat(edge_types)
+    #     rels_for_reg = self.rel_embeddings(merged_edge_type.unique().to(self.device))
+    #     edge_index_expand, edge_type_expand = self.Neg_Sampler.Triples_neg_sample(merged_edge_index, merged_edge_type)
+    #     edge_index_expand = edge_index_expand.to(self.device)
+    #     edge_type_expand = edge_type_expand.to(self.device)
     
-        head = self.ent_embeddings_kge(edge_index_expand[0].long())
-        tail = self.ent_embeddings_kge(edge_index_expand[1].long())
-        rels = self.rel_embeddings(edge_type_expand)
+    #     head = self.ent_embeddings_kge(edge_index_expand[0].long())
+    #     tail = self.ent_embeddings_kge(edge_index_expand[1].long())
+    #     rels = self.rel_embeddings(edge_type_expand)
 
-        pos_score, neg_score = self.KGEmodel(head, tail, rels, len(merged_edge_type))
-        #pos_score, neg_score = self.KGEmodel(head, tail, rels, edge_type_expand, len(merged_edge_type))
-        kge_loss = self.KGEloss(pos_score, neg_score)
-        reg_loss = l2_loss(
-                        head,
-                        tail,
-                        rels
-                    )
-        loss = kge_loss + self.reg_weight * reg_loss
-        return loss, kge_loss
+    #     pos_score, neg_score = self.KGEmodel(head, tail, rels, len(merged_edge_type))
+    #     #pos_score, neg_score = self.KGEmodel(head, tail, rels, edge_type_expand, len(merged_edge_type))
+    #     kge_loss = self.KGEloss(pos_score, neg_score)
+    #     reg_loss = l2_loss(
+    #                     head,
+    #                     tail,
+    #                     rels
+    #                 )
+    #     loss = kge_loss + self.reg_weight * reg_loss
+    #     return loss, kge_loss
     
     def generate_entity_relation_embeddings(self, save_path):
         import os

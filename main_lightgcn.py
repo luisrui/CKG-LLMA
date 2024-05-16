@@ -14,7 +14,7 @@ if __name__ == "__main__":
     parse.add_argument(
         "--argpath",
         type=str,
-        default="config/argsML_model.yaml",
+        default="argsML.yaml",
         help="the relative path of argments file",
     )
     args = parse.parse_args()
@@ -25,7 +25,6 @@ if __name__ == "__main__":
         'num_users' : data_config[args["data"]["name"]]["num_users"],
         'num_items' : data_config[args["data"]["name"]]["num_items"]
     })
-    print_yaml(args)
 
     device = "cuda:" + str(args["cuda"]) if int(args["cuda"]) >= 0 else "cpu"
     set_random_seed(seed=args["seed"])
@@ -48,14 +47,21 @@ if __name__ == "__main__":
         num_workers=args["dataloader_n_workers"],
     )
 
-    model = Model(
-        args=args,
-        norm_adj=rec_data.get_norm_adj,
-        kg=kg_data.get_struc_dataset,
-        ent2id=rec_data.ent2id,
-        rel2id=rec_data.rel2id,
-        device=device,
-    )
+    # model = Model(
+    #     args=args,
+    #     norm_adj=rec_data.get_norm_adj,
+    #     kg=kg_data.get_struc_dataset,
+    #     ent2id=rec_data.ent2id,
+    #     rel2id=rec_data.rel2id,
+    #     device=device,
+    # )
+
+    model = LightGCN(num_users=args['num_users'],
+                    num_items=args['num_items'],
+                    embed_dim=args['embedding_dim'],
+                    norm_adj=rec_data.get_norm_adj.to(device),
+                    n_layers=args['n_layers_lightgcn'],
+                    batch_size=args['batch_size'])
 
     if args["load_path"] and len(args["load_path"]) > 0:
         model.load_checkpoint(args["load_path"], device)
@@ -71,8 +77,9 @@ if __name__ == "__main__":
 
     if args['Train']:
         #Pretrain_KG_Embeddings(50, args, model, kg_data_loader, rec_data, optimizer, scheduler, device)
-        TrainwithGraph(27, args, model, rec_data, optimizer, scheduler, device)
+        #TrainwithGraph(6, args, model, rec_data, optimizer, scheduler, device)
         #Train(args, model, kg_data_loader, rec_data, kg_data, extractor, optimizer, scheduler, device)
+        TrainLightGCN(args, model, kg_data_loader, rec_data, optimizer, scheduler, device)
         #result = Test(args, rec_data, model, "test", device)
         #Generate_subgraphs(50, args, kg_data_loader, extractor, rec_data)
         #Prompt_Length_Test(50, 'Llama3', kg_data_loader, extractor, rec_data)

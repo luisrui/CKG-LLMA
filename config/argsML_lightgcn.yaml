@@ -4,15 +4,15 @@ data:
       name: 'MovieLens1M'
 ### Training
 Train: True
-seed: 2024
-learning_rate : 0.001
-epoch : 500
-start_epoch : 0
-batch_size : 10
+seed: 114
+learning_rate : 0.0001
+epoch : 5000
+start_epoch : 2000
+batch_size : 1024
 ### Model Setting
 isPretrain : 0
 kg_neg_size : 100
-max_sample_neighbors : 2
+max_sample_neighbors : 3
 dataloader_n_workers : 8
 embedding_dim : 64
 ent_embedding_dim : 64
@@ -20,23 +20,26 @@ rel_embedding_dim : 64
 hidden_embedding_dim : 256
 n_layers_lightgcn : 3
 loss_kge_weight : 0.5
-loss_reg_weight : 0.001
+loss_reg_weight : 0.0001
 #### Aggregator
 mess_dropout : [0.1, 0.1, 0.1]
 conv_dim_list : [64, 32, 16]
 aggregation_type : 'bi-interaction'
 #### Constrastive Learning
 start_step : 0
-end_step : 1600
+end_step : 0
 con_temperature : 0.2
-loss_con_weight : 0.1
+loss_con_weight : 0.01
 ### Evaluation
-load_path : '/data/cairui/KG-LLM-REC/checkpoint/epoch_25_Model_MovieLens1M.ckpt'
+load_path : 'epoch_2000_LightGCN.ckpt'
+special_save_hyper : ''
 save_path : '/data/cairui/KG-LLM-REC/'
 eval_interval : 1
-save_interval : 5
-topks : [10, 20, 50]
+save_interval : 300
+topks : [10]
 test_u_batch_size : 128
+metrics : ['precision', 'recall', 'ndcg']
+metric_decimal_place : 6
 
 
 

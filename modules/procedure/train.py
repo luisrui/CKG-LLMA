@@ -57,7 +57,7 @@ def Train(args, model, data_loader, rec_data, kg_data, extractor, optimizer, sch
         elif e % args["eval_interval"] == 0:
             result = Test(args, rec_data,  model, "valid", device)
 
-def TrainLightGCN(args, model, data_loader, rec_data, kg_data, extractor, optimizer, scheduler, device):
+def TrainLightGCN(args, model, data_loader, rec_data, optimizer, scheduler, device):
     steps_per_epoch = len(data_loader)
     losses = deque([], steps_per_epoch)
     losses_bpr = deque([], steps_per_epoch)
@@ -79,19 +79,21 @@ def TrainLightGCN(args, model, data_loader, rec_data, kg_data, extractor, optimi
             losses.append(loss.item())
             losses_bpr.append(bpr_loss.item())
             epoch_counter.set_description(
-                "Epoch %d |loss: %.3f |bpr_loss: %.3f"
+                "Epoch %d |loss: %.6f |bpr_loss: %.6f"
                 % (e + 1, np.mean(losses), np.mean(losses_bpr))
             )
         if scheduler:
             scheduler.step()
 
         if (e + 1) % args["eval_interval"] == 0:
-            save_model_name = (
+            result = Test(args, rec_data, model, "valid", device)
+
+        if (e + 1) % args["save_interval"] == 0:
+            save_model_name = os.path.join(
                 args["save_path"]
-                + f"./checkpoint/epoch_{e + 1}_{type(model).__name__}_{args['data']['name']}.ckpt"
+                + f"checkpoint/epoch_{e + 1}_{type(model).__name__}.ckpt"
             )
             model.save_checkpoint(save_model_name)
-            result = Test(args, rec_data, model, "valid", device)
 
 def TrainwithGraph(total_epoch, args, model, rec_data, optimizer, scheduler, device):
     epoch_counter = trange(args["start_epoch"], total_epoch, ncols=0)
@@ -104,7 +106,10 @@ def TrainwithGraph(total_epoch, args, model, rec_data, optimizer, scheduler, dev
 
     start_time = time.time()
     print(f'Loading enhanced graphs for {rec_data.name}...')
-    enhanced_info = pickle.load(open(f'./saved_graphs/{rec_data.name}_{args["batch_size"]}_{args["max_sample_neighbors"]}_e{total_epoch-1}_enhanced_{args["start_step"]}_{args["end_step"]}.pkl', 'rb'))
+    if args['end_step'] == 0:
+        enhanced_info = pickle.load(open(f'./saved_graphs/{rec_data.name}_{args["batch_size"]}_{args["max_sample_neighbors"]}_e{total_epoch-1}_enhanced.pkl', 'rb'))
+    else:
+        enhanced_info = pickle.load(open(f'./saved_graphs/{rec_data.name}_{args["batch_size"]}_{args["max_sample_neighbors"]}_e{total_epoch-1}_enhanced_{args["start_step"]}_{args["end_step"]}.pkl', 'rb'))
     end_time = time.time()
     print(f'Loaded {total_epoch} epochs of enhanced graphs, time is {end_time - start_time} seconds.')
 
@@ -167,7 +172,7 @@ def TrainwithGraph(total_epoch, args, model, rec_data, optimizer, scheduler, dev
         if (e + 1) % args["save_interval"] == 0:
             save_model_name = os.path.join(
                 args["save_path"]
-                + f"checkpoint/epoch_{e + 1}_{type(model).__name__}_{rec_data.name}.ckpt"
+                + f"checkpoint/epoch_{e + 1}_{type(model).__name__}_{rec_data.name}_{args['special_save_hyper']}.ckpt"
             )
             model.save_checkpoint(save_model_name)
             result = Test(args, rec_data,  model, "valid", device)

@@ -3,6 +3,8 @@ import torch
 import random
 import numpy as np
 import json
+from torch import nn as nn
+from torch.nn.init import xavier_normal_, xavier_uniform_, constant_
 
 from collections import defaultdict
 from torch_scatter import scatter_sum
@@ -13,6 +15,28 @@ def read_yaml(path):
     dict = yaml.safe_load(string)
 
     return dict
+
+def print_yaml(args : dict):
+    for key, value in args.items():
+        print(f"{key}: {value}")
+
+def xavier_uniform_initialization(module):
+    r"""using `xavier_uniform_`_ in PyTorch to initialize the parameters in
+    nn.Embedding and nn.Linear layers. For bias in nn.Linear layers,
+    using constant 0 to initialize.
+
+    .. _`xavier_uniform_`:
+        https://pytorch.org/docs/stable/nn.init.html?highlight=xavier_uniform_#torch.nn.init.xavier_uniform_
+
+    Examples:
+        >>> self.apply(xavier_uniform_initialization)
+    """
+    if isinstance(module, nn.Embedding):
+        xavier_uniform_(module.weight.data)
+    elif isinstance(module, nn.Linear):
+        xavier_uniform_(module.weight.data)
+        if module.bias is not None:
+            constant_(module.bias.data, 0)
 
 def set_random_seed(seed=2020):
     
