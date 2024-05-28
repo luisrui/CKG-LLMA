@@ -25,10 +25,11 @@ if __name__ == "__main__":
         'num_users' : data_config[args["data"]["name"]]["num_users"],
         'num_items' : data_config[args["data"]["name"]]["num_items"]
     })
+    print_yaml(args)
 
     device = "cuda:" + str(args["cuda"]) if int(args["cuda"]) >= 0 else "cpu"
     set_random_seed(seed=args["seed"])
-    kg_data = KGRecDataset(args)
+    #kg_data = KGRecDataset(args)
     rec_data = RecTrainDataset(args)
     # extractor = Extractor(
     #     args=args,
@@ -46,15 +47,6 @@ if __name__ == "__main__":
         shuffle=True,
         num_workers=args["dataloader_n_workers"],
     )
-
-    # model = Model(
-    #     args=args,
-    #     norm_adj=rec_data.get_norm_adj,
-    #     kg=kg_data.get_struc_dataset,
-    #     ent2id=rec_data.ent2id,
-    #     rel2id=rec_data.rel2id,
-    #     device=device,
-    # )
 
     model = LightGCN(num_users=args['num_users'],
                     num_items=args['num_items'],

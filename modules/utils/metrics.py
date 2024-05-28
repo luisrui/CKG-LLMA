@@ -40,7 +40,8 @@ class TopkMetric(object):
         avg_result = value.mean(axis=0)
         for k in self.topk:
             key = "{}@{}".format(metric, k)
-            metric_dict[key] = round(avg_result[k - 1], self.decimal_place)
+            #metric_dict[key] = round(avg_result[k - 1], self.decimal_place)
+            metric_dict[key] = avg_result[k - 1]
         return metric_dict
 
     def metric_info(self, pos_index, pos_len=None):

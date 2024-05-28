@@ -1,14 +1,14 @@
 cuda: 7
 data:
       path: './dataset'
-      name: 'MovieLens1M'
+      name: 'AmazonBook'
 ### Training
-Train : False
-seed : 114
+Train: True
+seed: 514
 learning_rate : 0.0001
-epoch : 100
-start_epoch : 0
-batch_size : 32
+epoch : 1000
+start_epoch : 200
+batch_size : 1024
 ### Model Setting
 isPretrain : 0
 kg_neg_size : 100
@@ -18,6 +18,7 @@ embedding_dim : 64
 ent_embedding_dim : 64
 rel_embedding_dim : 64
 hidden_embedding_dim : 256
+n_layers_lightgcn : 2
 loss_kge_weight : 0.5
 loss_reg_weight : 0.0001
 #### Aggregator
@@ -30,13 +31,12 @@ end_step : 0
 con_temperature : 0.2
 loss_con_weight : 0.01
 ### Evaluation
+load_path : 'epoch_200_LightGCN_AB-layer2.ckpt'
+special_save_hyper : 'AB-layer2'
+save_path : '/data/cairui/KG-LLM-REC/'
 eval_interval : 1
-topks : [10]
-test_u_batch_size : 128
+save_interval : 50
+topks : [10, 50, 100]
+test_u_batch_size : 1024
 metrics : ['precision', 'recall', 'ndcg']
 metric_decimal_place : 6
-### Saving
-special_save_hyper : 'bi-inter'
-load_path : 'epoch_27_Model_MovieLens1M_bi-inter.ckpt'
-save_path : '/data/cairui/KG-LLM-REC/'
-save_interval : 1

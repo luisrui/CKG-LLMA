@@ -292,6 +292,13 @@ class RecTrainDataset(torch.utils.data.Dataset):
             posItems = [self.wrapped_test_set[user] for user in users]
         return posItems
 
+    def get_UIinteraction(self):
+        edge_index = np.array([[u, i] for u in self.u_of_i.keys() for i in self.u_of_i[u]])
+        edge_index = np.transpose(edge_index)
+        edge_index = torch.tensor(edge_index, dtype=torch.long)
+        edge_type = torch.tensor([self.rel2id['liked']] * len(edge_index[0]), dtype=torch.long)
+        return edge_index, edge_type
+
 class Sampler(object):
     """Base class for all sampler to sample negative items.
     """

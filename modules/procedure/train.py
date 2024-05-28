@@ -91,7 +91,7 @@ def TrainLightGCN(args, model, data_loader, rec_data, optimizer, scheduler, devi
         if (e + 1) % args["save_interval"] == 0:
             save_model_name = os.path.join(
                 args["save_path"]
-                + f"checkpoint/epoch_{e + 1}_{type(model).__name__}.ckpt"
+                + f"checkpoint/epoch_{e + 1}_{type(model).__name__}_{args['special_save_hyper']}.ckpt"
             )
             model.save_checkpoint(save_model_name)
 
@@ -141,16 +141,20 @@ def TrainwithGraph(total_epoch, args, model, rec_data, optimizer, scheduler, dev
             pos_items = pos_items.to(device)
             neg_items = neg_items.to(device)
 
+            interaction = {
+                'users': users,
+                'pos_items': pos_items,
+                'neg_items': neg_items,
+                'g_types' : ['uu', 'ui', 'ii'],
+                'eh_g_types' : ['ui', 'ii']
+            }
+
             loss, bpr_loss, kge_loss, con_loss = model(
-                ['uu', 'ui', 'ii'], 
+                interaction,
                 edge_indexs, 
                 edge_types,
-                ['ui', 'ii'],
                 eh_edge_indexs, 
                 eh_edge_types, 
-                users, 
-                pos_items, 
-                neg_items
             )
 
             optimizer.zero_grad()

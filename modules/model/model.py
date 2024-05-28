@@ -16,7 +16,7 @@ from .KGEmb import *
 
 class Aggregator(MessagePassing):
     def __init__(self, in_dim, out_dim, dropout, aggregator_type):
-        super(Aggregator, self).__init__(aggr='add')
+        super(Aggregator, self).__init__(aggr='mean')
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.dropout = dropout
@@ -129,46 +129,41 @@ class Model(BasicModel):
         #### Evaluation
         self.rate_act_fn = nn.Sigmoid()
     
-    def forward(self, graph_types, edge_indexs, edge_types, eh_g_types, eh_edge_idxs, eh_edge_types, users, items, neg_items):
+    def forward(self, interaction, edge_indexs, edge_types, eh_edge_idxs, eh_edge_types):
         ### KG Embedding Learning(only training the ent_embeddings_kge, and rel_embeddings)
-        edge_attr = list()
-        for i in range(len(graph_types)):
-            graph_type = graph_types[i]
-            edge_index = edge_indexs[i].to(self.device)
-            edge_type = edge_types[i].to(self.device)
-            att_score = self.compute_attention(graph_type, edge_index, edge_type, len(edge_type))
-            edge_attr.append(att_score)
-        edge_attr = torch.cat(edge_attr, dim=0).to(self.device)
+        edge_attr = self._collect_edge_att(interaction["g_types"], edge_indexs, edge_types)
+        eh_edge_attr = self._collect_edge_att(interaction["eh_g_types"], eh_edge_idxs, eh_edge_types)
 
-        eh_edge_attr = list()
-        for i in range(len(eh_g_types)):
-            eh_g_type = eh_g_types[i]
-            eh_edge_idx = eh_edge_idxs[i].to(self.device)
-            eh_edge_type = eh_edge_types[i].to(self.device)
-            att_score = self.compute_attention(eh_g_type, eh_edge_idx, eh_edge_type, len(eh_edge_type))
-            eh_edge_attr.append(att_score)
-        eh_edge_attr = torch.cat(eh_edge_attr, dim=0).to(self.device)
-
+        edge_attr = edge_attr.to(self.device)
+        eh_edge_attr = eh_edge_attr.to(self.device)
         merged_edge_index = torch.cat(edge_indexs, dim=1).to(self.device)
         merged_eh_edge_index = torch.cat(eh_edge_idxs, dim=1).to(self.device)
         merged_edge_type = torch.cat(edge_types).to(self.device)
 
-        bpr_reg_loss, bpr_loss, con_loss = self._calc_bpr_loss(merged_edge_index, edge_attr, merged_eh_edge_index, eh_edge_attr, users, items, neg_items)
+        interaction.update({
+            'edge_indexs': merged_edge_index,
+            'edge_types': merged_edge_type, 
+            'edge_attrs': edge_attr,
+            'eh_edge_indexs': merged_eh_edge_index,
+            'eh_edge_attrs': eh_edge_attr,
+        })
+
+        bpr_reg_loss, bpr_loss, con_loss = self._calc_bpr_loss(interaction)
         
-        kge_reg_loss, kge_loss = self._calc_kge_loss(merged_edge_index, merged_edge_type)
+        kge_reg_loss, kge_loss = self._calc_kge_loss(interaction)
 
         total_loss = bpr_reg_loss + self.kge_weight * kge_reg_loss + self.con_weight * con_loss
 
         return total_loss, bpr_loss, kge_loss, con_loss
-    
-    def att_score(self, edge_index, edge_type, valid_id):
+
+    def _get_att_score(self, edge_index, edge_type, valid_id):
         r_mul_h = torch.matmul(self.ent_embeddings_kge(edge_index[0][valid_id].long()), self.W_r + self.W_r_type)          
         r_mul_t = torch.matmul(self.ent_embeddings_kge(edge_index[1][valid_id].long()), self.W_r + self.W_r_type)         
         r_embed = self.rel_embeddings(edge_type[valid_id])                                             
         att = torch.bmm(r_mul_t.unsqueeze(1), torch.tanh(r_mul_h + r_embed).unsqueeze(2)).squeeze(-1)  
         return att
 
-    def compute_attention(self, graph_type, edge_index, edge_type, num_edge):
+    def _calc_edge_att(self, graph_type, edge_index, edge_type, num_edge):
         sub_edge_id = torch.arange(num_edge).to(self.device)
         edge_attr = torch.zeros(len(sub_edge_id)).to(self.device)
         weight_specific = self._get_type_weights(graph_type)
@@ -180,15 +175,32 @@ class Model(BasicModel):
             tar_edge_id = sub_edge_id[mask]
             self.W_r = self.W_R[i]  # [entity_dim, relation_ dim]
             self.W_r_type = weight_specific[i]  # [entity_dim, relation_dim]
-            att = self.att_score(edge_index, edge_type, tar_edge_id)
+            att = self._get_att_score(edge_index, edge_type, tar_edge_id)
             edge_attr[mask] = att.view(1, -1)
         
         edge_attr = edge_softmax(edge_index, edge_attr)
 
         return edge_attr
     
-    def _calc_bpr_loss(self, edge_index, edge_attr, eh_edge_index, eh_egde_attr, users, items, neg_items):
-        x = self._forward_aggregator(self.ent_embeddings_kge.weight, edge_index, edge_attr)                
+    def _collect_edge_att(self, graph_types, edge_indexs, edge_types):
+        edge_attr = list()
+        
+        for i in range(len(graph_types)):
+            graph_type = graph_types[i]
+            edge_index = edge_indexs[i].to(self.device)
+            edge_type = edge_types[i].to(self.device)
+            att_score = self._calc_edge_att(graph_type, edge_index, edge_type, len(edge_type))
+            edge_attr.append(att_score)
+        edge_attr = torch.cat(edge_attr, dim=0)
+
+        return edge_attr
+    
+    def _calc_bpr_loss(self, interaction):
+        x = self._forward_aggregator(self.ent_embeddings_kge.weight, interaction["edge_indexs"], interaction["edge_attrs"])                
+
+        users = interaction['users']
+        items = interaction['pos_items']
+        neg_items = interaction['neg_items']
 
         user_embs = x[users]               
         pos_item_embs = x[items]       
@@ -197,8 +209,8 @@ class Model(BasicModel):
         sup_pos_ratings = inner_product(user_embs, pos_item_embs)       
         sup_neg_ratings = inner_product(user_embs, neg_item_embs)  
         
-        if eh_egde_attr.shape[0] != 0:
-            x_enhanced = self._forward_aggregator(self.ent_embeddings_kge.weight, eh_edge_index, eh_egde_attr)
+        if interaction["eh_edge_attrs"].shape[0] != 0:
+            x_enhanced = self._forward_aggregator(self.ent_embeddings_kge.weight, interaction["eh_edge_indexs"], interaction["eh_edge_attrs"])
 
             eh_user_embs = x_enhanced[users]
             eh_item_embs = x_enhanced[items]
@@ -230,8 +242,8 @@ class Model(BasicModel):
         loss = bpr_loss + self.reg_weight * bpr_reg_loss
         return loss, bpr_loss, con_loss
     
-    def _calc_kge_loss(self, edge_index, edge_type):
-        edge_index_expand, edge_type_expand = self.Neg_Sampler.Triples_neg_sample(edge_index, edge_type)
+    def _calc_kge_loss(self, interaction):
+        edge_index_expand, edge_type_expand = self.Neg_Sampler.Triples_neg_sample(interaction["edge_indexs"], interaction["edge_types"])
         edge_index_expand = edge_index_expand.to(self.device)
         edge_type_expand = edge_type_expand.to(self.device)
     
@@ -240,7 +252,7 @@ class Model(BasicModel):
         rels_embs = self.rel_embeddings(edge_type_expand)
 
         #pos_score, neg_score = self.KGEmodel(head_embs, tail_embs, rels_embs, len(edge_type))
-        pos_score, neg_score = self.KGEmodel(head_embs, tail_embs, rels_embs, edge_type_expand, len(edge_type), self.W_R)
+        pos_score, neg_score = self.KGEmodel(head_embs, tail_embs, rels_embs, edge_type_expand, len(interaction["edge_types"]), self.W_R)
         kge_loss = self.KGEloss(pos_score, neg_score)
 
         kge_reg_loss = self.reg_loss(
@@ -263,13 +275,13 @@ class Model(BasicModel):
         }[graph_type]
     
     def _forward_aggregator(self, x, edge_index, edge_attr):
-        all_x = []
+        all_embs = []
         for layer in self.aggregator_layers:
             x = layer(x, edge_index, edge_attr)
             norm_x = F.normalize(x, p=2, dim=1)
-            all_x.append(norm_x)
-        all_x = torch.cat(all_x, dim=-1)
-        return all_x
+            all_embs.append(norm_x)
+        all_embs = torch.cat(all_embs, dim=-1)
+        return all_embs
 
     def _forward_lightgcn(self, norm_adj, ego_embeddings):
         '''
@@ -289,9 +301,12 @@ class Model(BasicModel):
 
         return user_embeddings, item_embeddings
  
-    def getUsersRating(self, users):
-        users_emb = self.ent_embeddings_kge(users)
-        items_emb = self.ent_embeddings_kge.weight[self.num_users : self.num_users + self.num_items]
+    def getUsersRating(self, users, all_edge_index, all_edge_type):
+        all_edge_index, all_edge_type = all_edge_index.to(self.device), all_edge_type.to(self.device)
+        all_edge_attr = self._collect_edge_att(['ui'], [all_edge_index], [all_edge_type])
+        all_embs = self._forward_aggregator(self.ent_embeddings_kge.weight, all_edge_index, all_edge_attr)
+        users_emb = all_embs[users]
+        items_emb = all_embs[self.num_users : self.num_users + self.num_items]
         #rating = self.rate_act_fn(torch.matmul(users_emb, items_emb.T))
         rating = torch.matmul(users_emb, items_emb.T)
         return rating
@@ -321,7 +336,8 @@ class Model(BasicModel):
     
     def generate_entity_relation_embeddings(self, save_path):
         import os
-        ent_embs = self.ent_embeddings_kge.weight.cpu().detach().numpy()
+        all_embs = self._forward_aggregator()
+        ent_embs = all_embs.cpu().detach().numpy()
         rel_embs = self.rel_embeddings.weight.cpu().detach().numpy()
         np.savez(os.path.join(save_path, 'ent_rel_embs.npz'), ent_embs=ent_embs, rel_embs=rel_embs)
 

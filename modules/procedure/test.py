@@ -19,7 +19,7 @@ from ..utils import *
 #             'ndcg':np.array(ndcg)}
 
 def Test(args, recdataset : RecTrainDataset, model, mode : str, device):
-    print(f'Model Tesing for {mode} set')
+    print(f'Model Evaluating for {mode} set')
     u_batch_size = args['test_u_batch_size']
     model.eval()
     testset = recdataset.get_wrapped_set(mode)
@@ -38,15 +38,23 @@ def Test(args, recdataset : RecTrainDataset, model, mode : str, device):
     with torch.no_grad():
         users = list(testset.keys())
         #users_list, rating_list, groundTrue_list = [], [], []
-        total_batch = len(users) // u_batch_size + 1
-
+        #total_batch = len(users) // u_batch_size + 1
+        if model.__class__.__name__ == 'LightGCN':
+            pass
+        else:
+            all_edge_index, all_edge_type = recdataset.get_UIinteraction()
+            all_edge_index = all_edge_index.to(device)
+            all_edge_type = all_edge_type.to(device)
         for batch_users in minibatch(users, batch_size=u_batch_size):
             trainPos = recdataset.get_pos(batch_users)
             groundTrue = [testset[u] for u in batch_users]
             batch_users_gpu = torch.Tensor(batch_users).long()
             batch_users_gpu = batch_users_gpu.to(device)
 
-            rating = model.getUsersRating(batch_users_gpu)
+            if model.__class__.__name__ == 'LightGCN':
+                rating = model.getUsersRating(batch_users_gpu)
+            else:
+                rating = model.getUsersRating(batch_users_gpu, all_edge_index, all_edge_type)
             #rating = model.getPretrainedRating(batch_users_gpu)
             exclude_index, exclude_items = [], []
             for range_i, items in enumerate(trainPos):

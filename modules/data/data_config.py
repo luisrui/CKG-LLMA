@@ -3,19 +3,15 @@ data_config = {
         'user' : 'User_id',
         'item' : 'Id',
         'review' : 'review/text',
-        'num_users' : 70994,
-        'num_items' : 64117, 
+        'num_users' : 13373,
+        'num_items' : 46204, 
     },
-    'AmazonBookTiny' : {
-        'user' : 'User_id',
-        'item' : 'Id',
-        'review' : 'review/text',
-        'num_users' : 12634,
-        'num_items' : 12568, 
-    },
-    'Yelp' : {
-        'user' : 'xxx',
-        'item' : 'xx'
+    'Steam' : {
+        'user' : 'user',
+        'item' : 'item',
+        'review' : 'review',
+        'num_users' : 53553,
+        'num_items' : 13232,
     },
     'MovieLens1M' : {
         'user' : 'User',
