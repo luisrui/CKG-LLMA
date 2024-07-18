@@ -1,14 +1,100 @@
 import yaml
 import torch
 import random
+import os
+import wandb
+import uuid
 import numpy as np
 import json
 from torch import nn as nn
 from torch.nn.init import xavier_normal_, xavier_uniform_, constant_
 
 from collections import defaultdict
+from ml_collections.config_dict import config_dict
+from ml_collections import ConfigDict
 from torch_scatter import scatter_sum
+from copy import copy
 
+class WandBLogger(object):
+    @staticmethod
+    def get_default_config(updates=None):
+        config = ConfigDict()
+        config.online = True
+        config.prefix = "KGExplainer"
+        config.project = "LLM_KG_Rec"
+        config.output_dir = "./log"### load your own checkpoints file path here
+        config.experiment_id = config_dict.placeholder(str)
+        config.anonymous = config_dict.placeholder(str)
+        config.notes = config_dict.placeholder(str)
+        config.entity = config_dict.placeholder(str)
+        config.prefix_to_id = False
+
+        if updates is not None:
+            config.update(ConfigDict(updates).copy_and_resolve_references())
+        return config
+
+    def __init__(self, config, variant, enable=True):
+        self.enable = enable
+        self.config = self.get_default_config(config)
+
+        if self.config.experiment_id is None:
+            self.config.experiment_id = uuid.uuid4().hex
+
+        if self.config.prefix != "":
+            if self.config.prefix_to_id:
+                self.config.experiment_id = "{}--{}".format(
+                    self.config.prefix, self.config.experiment_id
+                )
+            else:
+                self.config.project = "{}--{}".format(self.config.prefix, self.config.project)
+
+        if self.enable:
+            if self.config.output_dir == "":
+                raise 'no ourpur dir error!'
+            else:
+                self.config.output_dir = os.path.join(
+                    self.config.output_dir, self.config.experiment_id
+                )
+                os.makedirs(self.config.output_dir, exist_ok=True)
+
+        self._variant = copy(variant)
+
+        if self.enable:
+            self.run = wandb.init(
+                reinit=True,
+                config=self._variant,
+                project=self.config.project,
+                dir=self.config.output_dir,
+                id=self.config.experiment_id,
+                anonymous=self.config.anonymous,
+                notes=self.config.notes,
+                entity=self.config.entity,
+                settings=wandb.Settings(
+                    start_method="thread",
+                    _disable_stats=True,
+                ),
+                mode="online" if self.config.online else "offline",
+                resume=True,
+            )
+        else:
+            self.run = None
+
+    def log(self, *args, **kwargs):
+        if self.enable:
+            self.run.log(*args, **kwargs)
+
+    @property
+    def experiment_id(self):
+        return self.config.experiment_id
+
+    @property
+    def variant(self):
+        return self.config.variant
+
+    @property
+    def output_dir(self):
+        return self.config.output_dir
+    
 def read_yaml(path):
     file = open(path, "r", encoding="utf-8")
     string = file.read()

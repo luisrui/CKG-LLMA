@@ -12,7 +12,7 @@ class BasicModel(nn.Module):
         self.eval()
 
     def save_checkpoint(self, path):
-        torch.save(self.state_dict(), path)
+        torch.save(self.state_dict(), f=path)
     
     def load_parameters(self, path):
         f = open(path, "r")

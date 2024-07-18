@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from collections import OrderedDict
-from ..data import RecTrainDataset, KGRecDataset, data_config
+from ..data import RecTrainDataset, KGRecDataset
 from ..utils import *
 
 # def test_one_batch(args, X):
@@ -35,26 +35,19 @@ def Test(args, recdataset : RecTrainDataset, model, mode : str, device):
         'ndcg': NDCG(args)
     }
 
+    num_users = args['num_users']
+    num_items = args['num_items']
+
     with torch.no_grad():
         users = list(testset.keys())
-        #users_list, rating_list, groundTrue_list = [], [], []
-        #total_batch = len(users) // u_batch_size + 1
-        if model.__class__.__name__ == 'LightGCN':
-            pass
-        else:
-            all_edge_index, all_edge_type = recdataset.get_UIinteraction()
-            all_edge_index = all_edge_index.to(device)
-            all_edge_type = all_edge_type.to(device)
         for batch_users in minibatch(users, batch_size=u_batch_size):
             trainPos = recdataset.get_pos(batch_users)
             groundTrue = [testset[u] for u in batch_users]
             batch_users_gpu = torch.Tensor(batch_users).long()
             batch_users_gpu = batch_users_gpu.to(device)
 
-            if model.__class__.__name__ == 'LightGCN':
-                rating = model.getUsersRating(batch_users_gpu)
-            else:
-                rating = model.getUsersRating(batch_users_gpu, all_edge_index, all_edge_type)
+            rating = model.getUsersRating(batch_users_gpu)
+            
             #rating = model.getPretrainedRating(batch_users_gpu)
             exclude_index, exclude_items = [], []
             for range_i, items in enumerate(trainPos):
@@ -75,34 +68,11 @@ def Test(args, recdataset : RecTrainDataset, model, mode : str, device):
             rating = rating.cpu().numpy()
             del rating
 
-            # users_list.append(batch_users)
-            # rating_list.append(rating_K.cpu())
-            # groundTrue_list.append(groundTrue)
-
         result_dict = OrderedDict()
         #metric_val = precision.calculate_metric(data_struct)
         for metric in args["metrics"]:
             metric_val = metric_class[metric].calculate_metric(data_struct)
             result_dict.update(metric_val)
 
-        # assert total_batch == len(users_list)
-        # X = zip(rating_list, groundTrue_list)
-        # pre_results = []
-        # for x in X:
-        #     pre_results.append(test_one_batch(args, x))
-
-        # for result in pre_results:
-        #     results['recall'] += result['recall']
-        #     results['precision'] += result['precision']
-        #     results['ndcg']  += result['ndcg']
-        # results['recall'] /= float(len(users))
-        # results['precision'] /= float(len(users))
-        # results['ndcg'] /= float(len(users))
-
-        # print("Results:")
-        # print(f"Precision: {[f'{p:.6f}' for p in results['precision']]}")
-        # print(f"Recall: {[f'{r:.6f}' for r in results['recall']]}")
-        # print(f"NDCG: {[f'{n:.6f}' for n in results['ndcg']]}")
-
         print(result_dict)
-        return results
+        return result_dict

@@ -4,60 +4,82 @@ import numpy as np
 import pickle
 from tqdm import tqdm
 from collections import deque, defaultdict
-from vllm import LLM, SamplingParams
+#from vllm import LLM, SamplingParams
 from tqdm import trange
-from ..data import LLM_import_path
-from ..utils import triples_transfer_to_graph, Read_prompt
+#from ..data import LLM_import_path
+from ..utils import triples_transfer_to_graph, WandBLogger
 from .test import Test
+from .procedure import *
 
 
-def Train(args, model, data_loader, rec_data, kg_data, extractor, optimizer, scheduler, device):
-    steps_per_epoch = len(data_loader)
-    losses = deque([], steps_per_epoch)
-    losses_bpr = deque([], steps_per_epoch)
-    losses_kge = deque([], steps_per_epoch)
-    epoch_counter = trange(args["start_epoch"], args["epoch"], ncols=0)
-    for e in epoch_counter:
-        for users, pos_items, reviews in data_loader:
-            neg_items = rec_data.negative_sample(users, pos_items)
-            subgraphs = extractor.sample_subgraph(
-                ["uu", "ui", "ii"], users, pos_items, neg_items
-            )
-            edge_indexs, edge_types = triples_transfer_to_graph(subgraphs)
+def Train(
+        args, 
+        model,
+        rec_data, 
+        kg_train_data, 
+        contrast_model, 
+        optimizer, 
+        scheduler):
+    logger = WandBLogger(
+        config=WandBLogger.get_default_config(),
+        variant=args,
+    )
+    device = args['device']
+    best_result = 0.
 
-            users = users.to(device)
-            pos_items = pos_items.to(device)
-            neg_items = neg_items.to(device)
+    for epoch in tqdm(range(args['epoch']), disable=False):
+        start = time.time()
+        # transR learning
+        if epoch%args['train_interval_kge'] == 0 and args['train_kge']:
+            print("Train KGE:")
+            kge_loss = TransR_train(args, kg_train_data, model, optimizer, device)
+            print(f"trans Loss: {kge_loss:.3f}")
+        else:
+            kge_loss = 0.
 
-            loss, bpr_loss, kge_loss = model(
-                edge_indexs, edge_types, users, pos_items, neg_items
-            )
+        # joint learning part
+        contrast_views = contrast_model.get_views()
+        print("[Joint Learning]")
+        (total_loss, bpr_loss, con_loss) = \
+            BPR_train_contrast(args, rec_data, model, contrast_model, contrast_views, optimizer)
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
 
-            losses.append(loss.item())
-            losses_bpr.append(bpr_loss.item())
-            losses_kge.append(kge_loss.item())
-            epoch_counter.set_description(
-                "Epoch %d |loss: %.3f |bpr_loss: %.3f |kge_loss: %.3f"
-                % (e + 1, np.mean(losses), np.mean(losses_bpr), np.mean(losses_kge))
-            )
-        if scheduler:
-            scheduler.step()
+        if (epoch + 1) % args['eval_interval'] == 0:
+            print("[Valid]")
+            results_val = Test(args, rec_data, model, 'valid', args['device'])
+            print("[TEST]")
+            results_test = Test(args, rec_data, model, 'test', args['device'])
 
-        if e % args["save_interval"] == 0:
-            save_model_name = os.path.join(
-                args["save_path"]
-                + f"checkpoint/epoch_{e + 1}_{type(model).__name__}.ckpt"
-            )
-            model.save_checkpoint(save_model_name)
-            result = Test(args, rec_data,  model, "valid", device)
-        elif e % args["eval_interval"] == 0:
-            result = Test(args, rec_data,  model, "valid", device)
+            logger.log({
+                'epoch' : epoch + 1,
+                'Precision(Val)' : results_val['precision@10'],
+                'Recall(Val)' : results_val['recall@10'],
+                'ndcg@10(Val)' : results_val['ndcg@10'],
+                'Precision(Test)' : results_test['precision@10'],
+                'Recall(Test)' : results_test['recall@10'],
+                'ndcg@10(Test)' : results_test['ndcg@10'],
+                'Total loss' : total_loss,
+                'BPR loss' : bpr_loss,
+                'CON loss' : con_loss,
+                'KGE loss' : kge_loss
+            })
 
-def TrainLightGCN(args, model, data_loader, rec_data, optimizer, scheduler, device):
+            if results_test["recall@10"] > best_result:
+                stopping_step = 0
+                best_result = results_test["recall@10"]
+                print("find a better model")
+                model.save_checkpoint(
+                    args['save_path'] + f"{type(model).__name__}_{args['data']['name']}.ckpt")
+
+            else:
+                stopping_step += 1
+                if stopping_step >= args['early_stop_epoch']:
+                    print(f"early stop triggerd at epoch {epoch}")
+                    break
+        
+        scheduler.step()
+
+def TrainLightGCN(args, model, data_loader, rec_data, extractor, optimizer, scheduler, device):
     steps_per_epoch = len(data_loader)
     losses = deque([], steps_per_epoch)
     losses_bpr = deque([], steps_per_epoch)
@@ -86,7 +108,7 @@ def TrainLightGCN(args, model, data_loader, rec_data, optimizer, scheduler, devi
             scheduler.step()
 
         if (e + 1) % args["eval_interval"] == 0:
-            result = Test(args, rec_data, model, "valid", device)
+            result = Test(args, rec_data, model, extractor, "valid", device)
 
         if (e + 1) % args["save_interval"] == 0:
             save_model_name = os.path.join(
@@ -95,7 +117,7 @@ def TrainLightGCN(args, model, data_loader, rec_data, optimizer, scheduler, devi
             )
             model.save_checkpoint(save_model_name)
 
-def TrainwithGraph(total_epoch, args, model, rec_data, optimizer, scheduler, device):
+def TrainwithGraph(total_epoch, args, model, rec_data, extractor, optimizer, scheduler, device):
     epoch_counter = trange(args["start_epoch"], total_epoch, ncols=0)
 
     start_time = time.time()
@@ -179,9 +201,9 @@ def TrainwithGraph(total_epoch, args, model, rec_data, optimizer, scheduler, dev
                 + f"checkpoint/epoch_{e + 1}_{type(model).__name__}_{rec_data.name}_{args['special_save_hyper']}.ckpt"
             )
             model.save_checkpoint(save_model_name)
-            result = Test(args, rec_data,  model, "valid", device)
+            result = Test(args, rec_data,  model, extractor, "valid", device)
         elif (e + 1) % args["eval_interval"] == 0:
-            result = Test(args, rec_data,  model, "valid", device)
+            result = Test(args, rec_data,  model, extractor, "valid", device)
 
 def Generate_subgraphs(epochs, args, data_loader, extractor, rec_data):
     '''

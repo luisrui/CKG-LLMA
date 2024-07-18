@@ -15,12 +15,75 @@ try:
     from cppimport import imp_from_filepath
     from os.path import join, dirname
     path = join(dirname(__file__), "SampleFunction.cpp")
-    SampleFunction = imp_from_filepath(path)
+    SampleFunction = imp_from_filepath(filepath=path)
     sample_ext = True
 except Exception as e:
     print("Error message:", str(e))
     print("Cpp extension not loaded")
     sample_ext = False
+
+class KGDataset(torch.utils.data.Dataset):
+    def __init__(self, args):
+        print('Loading Knowledge Graph Triples...')
+        self.name = args['data']['name']
+        self._data_dir = f'./dataset/{args["data"]["name"]}/'
+
+        triples = pd.read_csv(os.path.join(self._data_dir, 'kg.txt'), sep=' ', names=['h', 'r', 't'], engine='python') 
+        self.kg_data = triples
+        #self.kg_data = triples.drop_duplicates()
+        self.num_users = args['num_users']
+        self.num_items = args['num_items']
+        self.num_entity = len(args['ent2id'])
+        self.num_relation = len(args['rel2id'])
+        
+        self.kg_dict, self.heads = self.generate_kg_data(self.kg_data)
+        self.entity_num = args['entity_num_per_item']
+
+    def generate_kg_data(self, kg_data):# -> tuple[defaultdict[Any, list], list]: 
+        # construct kg dict
+        kg_dict = defaultdict(list)
+        for row in kg_data.iterrows():
+            h, r, t = row[1]
+            kg_dict[h].append((r, t))
+        heads = list(kg_dict.keys())
+        return kg_dict, heads
+
+    def get_kg_dict(self, item_num, device):
+        i2es = dict()
+        i2rs = dict()
+        for item in range(item_num):
+            rts = self.kg_dict.get(item, False)
+            if rts:
+                tails = list(map(lambda x:x[1], rts))
+                relations = list(map(lambda x:x[0], rts))
+                if(len(tails) > self.entity_num):
+                    i2es[item] = torch.IntTensor(tails).to(device)[:self.entity_num]
+                    i2rs[item] = torch.IntTensor(relations).to(device)[:self.entity_num]
+                else:
+                    # last embedding pos as padding idx
+                    tails.extend([self.num_entity]*(self.entity_num-len(tails)))
+                    relations.extend([self.num_relation]*(self.entity_num-len(relations)))
+                    i2es[item] = torch.IntTensor(tails).to(device)
+                    i2rs[item] = torch.IntTensor(relations).to(device)
+            else:
+                i2es[item] = torch.IntTensor([self.num_entity]*self.entity_num).to(device)
+                i2rs[item] = torch.IntTensor([self.num_relation]*self.entity_num).to(device)
+        return i2es, i2rs
+
+    def __len__(self):
+        return len(self.kg_dict)
+
+    def __getitem__(self, index):
+        head = self.heads[index]
+        relation, pos_tail = random.choice(self.kg_dict[head])
+        while True:
+            neg_head = random.choice(self.heads)
+            neg_tail = random.choice(self.kg_dict[neg_head])[1]
+            if (relation, neg_tail) in self.kg_dict[head]:
+                continue
+            else:
+                break
+        return head, relation, pos_tail, neg_tail
     
 class KGRecDataset(torch_geometric.data.Dataset):
     '''
@@ -129,15 +192,15 @@ class KGRecDataset(torch_geometric.data.Dataset):
         self.u_of_u = {u: np.flatnonzero(row).tolist() for u, row in enumerate(user_user.numpy())}
         
         # Build self.i_of_i
-        print('Building item-item relations...')
-        item_mask = (edge_index[0] >= self.num_user) & (edge_index[0] < self.num_user + self.num_items) & \
-            (edge_index[1] >= self.num_user) & (edge_index[1] < self.num_user + self.num_items)
-        #item_item = torch.full((self.num_items, self.num_items), -1, dtype=torch.int64)
-        item_hs, item_ts, ii_rels = edge_index[0][item_mask].numpy(), edge_index[1][item_mask].numpy(), edge_type[item_mask].numpy()
-        for i in tqdm(range(len(item_hs))):
-            h, t, r = item_hs[i], item_ts[i], ii_rels[i]
-            self.i_of_i[h].append((r, t))
-            self.i_of_i[t].append((r, h))
+        # print('Building item-item relations...')
+        # item_mask = (edge_index[0] >= self.num_user) & (edge_index[0] < self.num_user + self.num_items) & \
+        #     (edge_index[1] >= self.num_user) & (edge_index[1] < self.num_user + self.num_items)
+        # #item_item = torch.full((self.num_items, self.num_items), -1, dtype=torch.int64)
+        # item_hs, item_ts, ii_rels = edge_index[0][item_mask].numpy(), edge_index[1][item_mask].numpy(), edge_type[item_mask].numpy()
+        # for i in tqdm(range(len(item_hs))):
+        #     h, t, r = item_hs[i], item_ts[i], ii_rels[i]
+        #     self.i_of_i[h].append((r, t))
+        #     self.i_of_i[t].append((r, h))
         #self.i_of_i = {i : [(h, r, t) for h, r, t in zip(edge_index[0][item_mask], edge_type[item_mask], edge_index[1][item_mask]) if i == h or i == t] for i in range(self.num_user, self.num_user+self.num_items)}
         
         ## Build self.i_of_a
@@ -211,6 +274,18 @@ class RecTrainDataset(torch.utils.data.Dataset):
     def get_norm_adj(self):
         return self.norm_adj
     
+    @property
+    def item_np(self):
+        return np.array([
+            self.ent2id[self.trainset.iloc[idx][data_config[self.name]['item']]] for idx in range(len(self.trainset))
+        ])
+
+    @property
+    def user_np(self):
+        return np.array([
+            self.ent2id[self.trainset.iloc[idx][data_config[self.name]['user']]] for idx in range(len(self.trainset))
+        ])
+
     def __len__(self):
         return len(self.trainset)
     
@@ -218,9 +293,10 @@ class RecTrainDataset(torch.utils.data.Dataset):
         user_id = self.ent2id[self.trainset.iloc[idx][data_config[self.name]['user']]]
         item_id = self.ent2id[self.trainset.iloc[idx][data_config[self.name]['item']]]
         #user_id_negsampled, item_id_negsampled = self._sampler.neg_sample_fn(user_id, item_id)
-        review = self.trainset.iloc[idx][data_config[self.name]['review']]
+        #review = self.trainset.iloc[idx][data_config[self.name]['review']]
         #return user_id_negsampled, item_id_negsampled, review
-        return user_id, item_id, review
+        neg_id = self.negative_sample(torch.Tensor([user_id]).long(), torch.Tensor([item_id]).long())
+        return user_id, item_id, neg_id
 
     def negative_sample(self, users:torch.Tensor, items:torch.Tensor):
         S = self._sampler.UniformSample_original(self.seed, users, items)
@@ -368,7 +444,7 @@ class PairwiseSampler(Sampler):
                     break
             S.append([user, positem, negitem])
 
-        return np.array(S)
+        return np.array(object=S)
     
 class NegativeSampler(Sampler):
     '''

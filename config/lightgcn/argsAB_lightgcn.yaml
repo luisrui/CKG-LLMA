@@ -3,7 +3,7 @@ data:
       path: './dataset'
       name: 'AmazonBook'
 ### Training
-Train: True
+Train: False
 seed: 514
 learning_rate : 0.0001
 epoch : 1000
@@ -31,7 +31,7 @@ end_step : 0
 con_temperature : 0.2
 loss_con_weight : 0.01
 ### Evaluation
-load_path : 'epoch_200_LightGCN_AB-layer2.ckpt'
+load_path : 'epoch_1000_LightGCN_AB-layer2.ckpt'
 special_save_hyper : 'AB-layer2'
 save_path : '/data/cairui/KG-LLM-REC/'
 eval_interval : 1

@@ -13,20 +13,20 @@ class Extractor():
     Extracting subgraphs based on one-hop neighbours. When the core node is user, there should be two subgraphs:(user->user, user->item); when the core node is item, 
     there should be two subgraphs:(item->item, user->item). The total number of graphs of one pair of (user, item) should be 4.
     '''
-    def __init__(self, args : dict, num_user : int, num_items : int, ent2id : list, rel2id : list, srcKG : KGRecDataset, recData: RecTrainDataset):
+    def __init__(self, args : dict, srcKG : KGRecDataset, recData: RecTrainDataset):
 
         print('Initializing Subgraph Extractor...')
         self.max_neighbors = args['max_sample_neighbors']
         self.name = args['data']['name']
 
-        self.ent2id = ent2id
-        self.rel2id = rel2id
+        self.ent2id = args['ent2id']
+        self.rel2id = args['rel2id']
         # self.id2ent = {Id : ent for ent, Id in zip(ent2id.keys(), ent2id.values())}
         # self.id2rel = {Id : rel for rel, Id in zip(rel2id.keys(), rel2id.values())}
         self.batch_size = args['batch_size']
 
-        self.num_user = num_user
-        self.num_items = num_items
+        self.num_user = args['num_user']
+        self.num_items = args['num_items']
         
         self.u_of_i = recData.u_of_i
         self.u_of_u = srcKG.u_of_u

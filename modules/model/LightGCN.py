@@ -8,22 +8,23 @@ import scipy.sparse as sp
 import os
 import json
 
-from .model import BasicModel
+from .BasicModel import BasicModel
 from ..utils import (inner_product, EmbLoss, BPRLoss, xavier_uniform_initialization)
 
 class LightGCN(BasicModel):
-    def __init__(self, num_users, num_items, embed_dim, norm_adj, n_layers, batch_size):
+    def __init__(self, args, norm_adj):
         super(LightGCN, self).__init__()
-        self.num_users = num_users
-        self.num_items = num_items
-        self.embed_dim = embed_dim
+        self.num_users = args['num_users']
+        self.num_items = args['num_items']
+        self.num_features = args['num_features']
+        self.embed_dim = args['embedding_dim']
         self.norm_adj = norm_adj
-        self.n_layers = n_layers
-        self.reg_loss_weight = 1 / batch_size
+        self.n_layers = args['n_layers_lightgcn']
+        self.reg_loss_weight = 1 / args['batch_size']
 
         # self.user_embeddings = nn.Embedding(self.num_users, self.embed_dim)
         # self.item_embeddings = nn.Embedding(self.num_items, self.embed_dim)
-        self.ent_embeddings = nn.Embedding(self.num_users + self.num_items, self.embed_dim)
+        self.ent_embeddings = nn.Embedding(self.num_users + self.num_items + self.num_features, self.embed_dim)
         #self.ent_embeddings.weight.data.copy_(torch.from_numpy(self.config['user_emb']))
         nn.init.normal_(self.ent_embeddings.weight, std=0.1)
         self.regloss = EmbLoss()

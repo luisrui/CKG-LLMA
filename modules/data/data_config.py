@@ -10,7 +10,7 @@ data_config = {
         'user' : 'user',
         'item' : 'item',
         'review' : 'review',
-        'num_users' : 53553,
+        'num_users' : 53533,
         'num_items' : 13232,
     },
     'MovieLens1M' : {

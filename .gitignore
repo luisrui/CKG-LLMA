@@ -2,6 +2,7 @@
 *.ipynb
 **/__pycache__
 **/references_code
+**/reference
 **/pretrained_models
 *.zip
 **/.vscode
@@ -9,3 +10,5 @@
 **.rendered.**.cpp
 **/checkpoint
 **/saved_graphs
+**/baselines
+**/log

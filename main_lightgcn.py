@@ -48,19 +48,14 @@ if __name__ == "__main__":
         num_workers=args["dataloader_n_workers"],
     )
 
-    model = LightGCN(num_users=args['num_users'],
-                    num_items=args['num_items'],
-                    embed_dim=args['embedding_dim'],
-                    norm_adj=rec_data.get_norm_adj.to(device),
-                    n_layers=args['n_layers_lightgcn'],
-                    batch_size=args['batch_size'])
+    mode_KGATbased = LightGCN(args=args, norm_adj=rec_data.get_norm_adj.to(device))
 
     if args["load_path"] and len(args["load_path"]) > 0:
-        model.load_checkpoint(args["load_path"], device)
+        mode_KGATbased.load_checkpoint(args["load_path"], device)
 
-    model = model.to(device)
+    mode_KGATbased = mode_KGATbased.to(device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=args["learning_rate"])
+    optimizer = torch.optim.Adam(mode_KGATbased.parameters(), lr=args["learning_rate"])
 
     scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=5, T_mult=2, eta_min=1e-5)
     # scheduler = None
@@ -71,10 +66,10 @@ if __name__ == "__main__":
         #Pretrain_KG_Embeddings(50, args, model, kg_data_loader, rec_data, optimizer, scheduler, device)
         #TrainwithGraph(6, args, model, rec_data, optimizer, scheduler, device)
         #Train(args, model, kg_data_loader, rec_data, kg_data, extractor, optimizer, scheduler, device)
-        TrainLightGCN(args, model, kg_data_loader, rec_data, optimizer, scheduler, device)
+        TrainLightGCN(args, mode_KGATbased, kg_data_loader, rec_data, None, optimizer, scheduler, device)
         #result = Test(args, rec_data, model, "test", device)
         #Generate_subgraphs(50, args, kg_data_loader, extractor, rec_data)
         #Prompt_Length_Test(50, 'Llama3', kg_data_loader, extractor, rec_data)
         #model.generate_entity_relation_embeddings(save_path='checkpoint/saved_embs/')
     else:
-        result = Test(args, rec_data, model, "test", device)
+        result = Test(args, rec_data, mode_KGATbased, extractor, "test", device)

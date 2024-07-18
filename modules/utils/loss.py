@@ -104,5 +104,6 @@ class BPRLoss(nn.Module):
         self.gamma = gamma
 
     def forward(self, pos_score, neg_score):
-        loss = -torch.log(self.gamma + torch.sigmoid(pos_score - neg_score)).mean()
+        #loss = -torch.log(self.gamma + torch.sigmoid(pos_score - neg_score)).sum()
+        loss = torch.sum(torch.nn.functional.softplus(-(pos_score - neg_score)))
         return loss

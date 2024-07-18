@@ -1,343 +1,251 @@
 import torch
-import torch.nn as nn
-from torch_geometric.nn import RGCNConv
+from torch.serialization import save
 import torch.sparse as torch_sp
+import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import MessagePassing
-import numpy as np
-import scipy.sparse as sp
-
-
-from ..data import data_config, NegativeSampler
-from ..utils import (inner_product, BPRLoss, EmbLoss, MarginLoss, edge_softmax)
 
 from .BasicModel import BasicModel
+from ..utils import *
 from .KGEmb import *
+from .GAT import GAT
 
-class Aggregator(MessagePassing):
-    def __init__(self, in_dim, out_dim, dropout, aggregator_type):
-        super(Aggregator, self).__init__(aggr='mean')
-        self.in_dim = in_dim
-        self.out_dim = out_dim
-        self.dropout = dropout
-        self.aggregator_type = aggregator_type
-        self.message_dropout = nn.Dropout(dropout)
+## Knowledge-enhanced Large-language-model Contrastive Recommender
+class KLMCR(BasicModel):
+    def __init__(self, args, rec_data, kg_data):
+        super(KLMCR, self).__init__()
 
-        if aggregator_type == 'gcn':
-            self.W = nn.Linear(self.in_dim, self.out_dim)       # W in Equation (6)
-        elif aggregator_type == 'graphsage':
-            self.W = nn.Linear(self.in_dim * 2, self.out_dim)   # W in Equation (7)
-        elif aggregator_type == 'bi-interaction':
-            self.W1 = nn.Linear(self.in_dim, self.out_dim)      # W1 in Equation (8)
-            self.W2 = nn.Linear(self.in_dim, self.out_dim)      # W2 in Equation (8)
-        else:
-            raise NotImplementedError
-
-        self.activation = nn.LeakyReLU()
-
-    def forward(self, x, edge_index, edge_attr):
-        # x: [num_nodes, in_dim]
-        # edge_index: [2, num_edges]
-        # edge_attr:  [num_edges]
-        return self.propagate(edge_index, x=x, edge_attr=edge_attr)
-
-    def message(self, x_j, edge_attr):
-        # x_j: origin features [num_edges, in_dim]
-        # edge_attr: edge_attr [num_edges]
-        msg = x_j * edge_attr.view(-1, 1)
-        return msg
-
-    def update(self, aggr_out, x):
-        # aggr_out: aggregated info [num_nodes, in_dim]
-        # x: all nodes embeddings [num_nodes, in_dim]
-        if self.aggregator_type == 'gcn':
-            out = self.activation(self.W(x + aggr_out))              # (num_nodes, out_dim)
-        elif self.aggregator_type == 'graphsage':
-            out = self.activation(self.W(torch.cat([x, aggr_out], dim=1)))   # (num_nodes, out_dim)
-        elif self.aggregator_type == 'bi-interaction':
-            out1 = self.activation(self.W1(x + aggr_out))            # (num_nodes, out_dim)
-            out2 = self.activation(self.W2(x * aggr_out))            # (num_nodes, out_dim)
-            out = out1 + out2
-        else:
-            raise NotImplementedError
-
-        out = self.message_dropout(out)
-        return out
-    
-class Model(BasicModel):
-    def __init__(self, args : dict, norm_adj, kg, ent2id : dict, rel2id : dict, device : str):
-        super(Model, self).__init__()
-        self.ent2id = ent2id
-        self.rel2id = rel2id
-        self.num_rel = len(rel2id)
-        self.device = device
-
-        # self.n_layers = args['n_layers_lightgcn']
-        self.kge_weight = args['loss_kge_weight']
-        self.reg_weight = args['loss_reg_weight']
-        self.con_weight = args['loss_con_weight']
-        self.con_temp = args['con_temperature']
-        self.num_ag_layers = len(args['conv_dim_list'])
-        self.conv_dim_list = [args['ent_embedding_dim']] + args['conv_dim_list']
-        self.mess_dropout = args['mess_dropout']
-        self.aggregation_type = args['aggregation_type']
-
-        # users, items, features
-        self.num_users = data_config[args["data"]["name"]]['num_users']
-        self.num_items = data_config[args["data"]["name"]]['num_items']
-        self.ent_embeddings_kge = nn.Embedding(num_embeddings=len(ent2id), embedding_dim=args['ent_embedding_dim'])
-        #self.ui_embeddings = nn.Embedding(num_embeddings=self.num_users + self.num_items, embedding_dim=args['embedding_dim'])
-        #self.ent_embeddings_llm = nn.Embedding(num_embeddings=len(ent2id), embedding_dim=args['embedding_dim'])
-        self.rel_embeddings = nn.Embedding(num_embeddings=self.num_rel, embedding_dim=args['rel_embedding_dim'])
-
-        #self.fused_embeddings = nn.Embedding(num_embeddings=self.num_users + self.num_items, embedding_dim=args['embedding_dim'])
-        # if args['isPretrain'] == 0:
-        #     nn.init.normal_(self.ent_embeddings.weight, std=0.1)
-        #     nn.init.normal_(self.rel_embedding, std=0.1)
-        # else:
-        #     self.ent_embeddings.weight.data.copy_(torch.from_numpy(self.config['user_emb']))
-        #     self.rel_embeddings.weight.data.copy_(torch.from_numpy(self.config['item_emb']))
-        #     print('use pretarined data')
-
-        self.norm_adj = norm_adj.to(device)
-
-        ### Attention Design
-        self.W_R = nn.Parameter(torch.Tensor(self.num_rel, args['ent_embedding_dim'], args['rel_embedding_dim']))
-        self.W_R_uu = nn.Parameter(torch.Tensor(self.num_rel, args['ent_embedding_dim'], args['rel_embedding_dim']))
-        self.W_R_ii = nn.Parameter(torch.Tensor(self.num_rel, args['ent_embedding_dim'], args['rel_embedding_dim']))
-        self.W_R_ui = nn.Parameter(torch.Tensor(self.num_rel, args['ent_embedding_dim'], args['rel_embedding_dim']))
-
-        nn.init.xavier_uniform_(self.W_R, gain=nn.init.calculate_gain('relu'))
-        nn.init.xavier_uniform_(self.W_R_uu, gain=nn.init.calculate_gain('relu'))
-        nn.init.xavier_uniform_(self.W_R_ii, gain=nn.init.calculate_gain('relu'))
-        nn.init.xavier_uniform_(self.W_R_ui, gain=nn.init.calculate_gain('relu'))
-
-        self.Neg_Sampler = NegativeSampler(args['data']['name'], kg, ent2id, rel2id, args['kg_neg_size'])
-        self.KGEmodel = TransR(args['ent_embedding_dim'], args['rel_embedding_dim'], rel_num=self.num_rel)
-        #self.KGEmodel = TransE()
-        self.KGEloss = MarginLoss(margin=3.0)
-        # self.conv_gcn1 = RGCNConv(in_channels=args['embedding_dim'], out_channels=args['hidden_embedding_dim'], num_relations=self.num_rel, num_bases=self.num_rel)
-        # self.conv_gcn2 = RGCNConv(in_channels=args['hidden_embedding_dim'], out_channels=args['embedding_dim'], num_relations=self.num_rel, num_bases=self.num_rel)
+        self.args = args
+        self.device = args['device']
+        
+        self.dataset_name = args["data"]['name']
+        #self.kg_dataset = kg_data
+        self.__init_weight(rec_data, kg_data)
+        
+        ### BPR
         self.mf_loss = BPRLoss()
         self.reg_loss = EmbLoss()
-        self.act_func = nn.LeakyReLU(negative_slope=0.2)
-
-        self.aggregator_layers = nn.ModuleList()
-        for k in range(self.num_ag_layers):
-            self.aggregator_layers.append(Aggregator(self.conv_dim_list[k], self.conv_dim_list[k + 1], self.mess_dropout[k], self.aggregation_type))
-
-        #### Evaluation
-        self.rate_act_fn = nn.Sigmoid()
+        self.reg_weight = args['loss_reg_weight']
+        ### KGE
+        #self.KGEmodel = TransE()
+        #self.KGEloss = MarginLoss(margin=3.0)
+        self.kgcn = args['kgcn']
+        self.gat = GAT(self.latent_dim, self.latent_dim,
+                       dropout=0.4, alpha=0.2).train()
     
-    def forward(self, interaction, edge_indexs, edge_types, eh_edge_idxs, eh_edge_types):
-        ### KG Embedding Learning(only training the ent_embeddings_kge, and rel_embeddings)
-        edge_attr = self._collect_edge_att(interaction["g_types"], edge_indexs, edge_types)
-        eh_edge_attr = self._collect_edge_att(interaction["eh_g_types"], eh_edge_idxs, eh_edge_types)
+    def __init_weight(self, rec_data, kg_data):
+        self.num_users = self.args['num_users']
+        self.num_items = self.args['num_items']
+        self.ent2id = self.args['ent2id']
+        self.rel2id = self.args['rel2id']
+        self.num_entities = len(self.ent2id)
+        self.num_relations = len(self.rel2id)
 
-        edge_attr = edge_attr.to(self.device)
-        eh_edge_attr = eh_edge_attr.to(self.device)
-        merged_edge_index = torch.cat(edge_indexs, dim=1).to(self.device)
-        merged_eh_edge_index = torch.cat(eh_edge_idxs, dim=1).to(self.device)
-        merged_edge_type = torch.cat(edge_types).to(self.device)
+        self.latent_dim = self.args['embedding_dim']
+        self.n_layers = self.args['lightGCN_n_layers']
+        self.keep_prob = self.args['keep_prob']
+        self.A_split = self.args['A_split']
 
-        interaction.update({
-            'edge_indexs': merged_edge_index,
-            'edge_types': merged_edge_type, 
-            'edge_attrs': edge_attr,
-            'eh_edge_indexs': merged_eh_edge_index,
-            'eh_edge_attrs': eh_edge_attr,
-        })
+        self.embedding_entity = torch.nn.Embedding(
+            num_embeddings=self.num_entities+1, embedding_dim=self.latent_dim)
+        self.embedding_relation = torch.nn.Embedding(
+            num_embeddings=self.num_relations+1, embedding_dim=self.latent_dim)
+        # relation weights
+        # self.W_R = nn.Parameter(torch.Tensor(
+        #     self.num_relations, self.latent_dim, self.latent_dim))
+        # nn.init.xavier_uniform_(self.W_R, gain=nn.init.calculate_gain('relu'))
 
-        bpr_reg_loss, bpr_loss, con_loss = self._calc_bpr_loss(interaction)
-        
-        kge_reg_loss, kge_loss = self._calc_kge_loss(interaction)
-
-        total_loss = bpr_reg_loss + self.kge_weight * kge_reg_loss + self.con_weight * con_loss
-
-        return total_loss, bpr_loss, kge_loss, con_loss
-
-    def _get_att_score(self, edge_index, edge_type, valid_id):
-        r_mul_h = torch.matmul(self.ent_embeddings_kge(edge_index[0][valid_id].long()), self.W_r + self.W_r_type)          
-        r_mul_t = torch.matmul(self.ent_embeddings_kge(edge_index[1][valid_id].long()), self.W_r + self.W_r_type)         
-        r_embed = self.rel_embeddings(edge_type[valid_id])                                             
-        att = torch.bmm(r_mul_t.unsqueeze(1), torch.tanh(r_mul_h + r_embed).unsqueeze(2)).squeeze(-1)  
-        return att
-
-    def _calc_edge_att(self, graph_type, edge_index, edge_type, num_edge):
-        sub_edge_id = torch.arange(num_edge).to(self.device)
-        edge_attr = torch.zeros(len(sub_edge_id)).to(self.device)
-        weight_specific = self._get_type_weights(graph_type)
-
-        for i in range(self.num_rel):
-            mask = (edge_type == i)
-            if sum(mask) == 0:
-                continue
-            tar_edge_id = sub_edge_id[mask]
-            self.W_r = self.W_R[i]  # [entity_dim, relation_ dim]
-            self.W_r_type = weight_specific[i]  # [entity_dim, relation_dim]
-            att = self._get_att_score(edge_index, edge_type, tar_edge_id)
-            edge_attr[mask] = att.view(1, -1)
-        
-        edge_attr = edge_softmax(edge_index, edge_attr)
-
-        return edge_attr
-    
-    def _collect_edge_att(self, graph_types, edge_indexs, edge_types):
-        edge_attr = list()
-        
-        for i in range(len(graph_types)):
-            graph_type = graph_types[i]
-            edge_index = edge_indexs[i].to(self.device)
-            edge_type = edge_types[i].to(self.device)
-            att_score = self._calc_edge_att(graph_type, edge_index, edge_type, len(edge_type))
-            edge_attr.append(att_score)
-        edge_attr = torch.cat(edge_attr, dim=0)
-
-        return edge_attr
-    
-    def _calc_bpr_loss(self, interaction):
-        x = self._forward_aggregator(self.ent_embeddings_kge.weight, interaction["edge_indexs"], interaction["edge_attrs"])                
-
-        users = interaction['users']
-        items = interaction['pos_items']
-        neg_items = interaction['neg_items']
-
-        user_embs = x[users]               
-        pos_item_embs = x[items]       
-        neg_item_embs = x[neg_items]       
-
-        sup_pos_ratings = inner_product(user_embs, pos_item_embs)       
-        sup_neg_ratings = inner_product(user_embs, neg_item_embs)  
-        
-        if interaction["eh_edge_attrs"].shape[0] != 0:
-            x_enhanced = self._forward_aggregator(self.ent_embeddings_kge.weight, interaction["eh_edge_indexs"], interaction["eh_edge_attrs"])
-
-            eh_user_embs = x_enhanced[users]
-            eh_item_embs = x_enhanced[items]
-
-            pos_ratings_user = inner_product(user_embs, eh_user_embs)  
-            pos_ratings_item = inner_product(pos_item_embs, eh_item_embs)   
-            tot_ratings_user = torch.matmul(user_embs, eh_user_embs.T)
-            tot_ratings_item = torch.matmul(pos_item_embs, eh_item_embs.T)
-            ssl_logits_user = tot_ratings_user - pos_ratings_user[:, None] 
-            ssl_logits_item = tot_ratings_item - pos_ratings_item[:, None]
-
-            clogits_user = torch.logsumexp(ssl_logits_user / self.con_temp, dim=1)
-            clogits_item = torch.logsumexp(ssl_logits_item / self.con_temp, dim=1)
-            con_loss = torch.sum(clogits_user + clogits_item)
+        if self.args['LoadPretrain'] == 0:
+            # nn.init.normal_(self.embedding_user.weight, std=0.1)
+            # nn.init.normal_(self.embedding_item.weight, std=0.1)
+            nn.init.normal_(self.embedding_entity.weight, std=0.1)
+            nn.init.normal_(self.embedding_relation.weight, std=0.1)
         else:
-            con_loss = 0.0
+            self.embedding_entity.weight.data.copy_(
+                torch.from_numpy(self.args['user_emb']))
+            self.embedding_relation.weight.data.copy_(
+                torch.from_numpy(self.args['item_emb']))
+            print('use pretrained data')
+        self.f = nn.Sigmoid()
+        self.Graph = rec_data.get_norm_adj.to(self.device)
+        # self.ItemNet = self.kg_dataset.get_item_net_from_kg(self.num_items)
+        self.kg_dict, self.item2relations = kg_data.get_kg_dict(
+            self.num_items, self.device)
+        #self.kg_dict = kg_data.kg_dict
 
-        bpr_loss = self.mf_loss(sup_pos_ratings, sup_neg_ratings)
+    def calc_kg_loss_transE(self, h, r, pos_t, neg_t):
+        """
+        h:      (kg_batch_size)
+        r:      (kg_batch_size)
+        pos_t:  (kg_batch_size)
+        neg_t:  (kg_batch_size)
+        """
+        r_embed = self.embedding_relation(r)            # (kg_batch_size, relation_dim)
+        # (kg_batch_size, entity_dim)
+        h_embed = self.embedding_entity(h)
+        pos_t_embed = self.embedding_entity(pos_t)      # (kg_batch_size, entity_dim)
+        neg_t_embed = self.embedding_entity(neg_t)      # (kg_batch_size, entity_dim)
 
-        bpr_reg_loss = self.reg_loss(
-            user_embs,
-            pos_item_embs,
-            neg_item_embs,
-            eh_user_embs,
-            eh_item_embs,
-            require_pow=True
-        )
-        
-        loss = bpr_loss + self.reg_weight * bpr_reg_loss
-        return loss, bpr_loss, con_loss
-    
-    def _calc_kge_loss(self, interaction):
-        edge_index_expand, edge_type_expand = self.Neg_Sampler.Triples_neg_sample(interaction["edge_indexs"], interaction["edge_types"])
-        edge_index_expand = edge_index_expand.to(self.device)
-        edge_type_expand = edge_type_expand.to(self.device)
-    
-        head_embs = self.ent_embeddings_kge(edge_index_expand[0].long())
-        tail_embs = self.ent_embeddings_kge(edge_index_expand[1].long())
-        rels_embs = self.rel_embeddings(edge_type_expand)
+        pos_score = torch.sum(
+            torch.pow(h_embed + r_embed - pos_t_embed, 2), dim=1)     # (kg_batch_size)
+        neg_score = torch.sum(
+            torch.pow(h_embed + r_embed - neg_t_embed, 2), dim=1)     # (kg_batch_size)
 
-        #pos_score, neg_score = self.KGEmodel(head_embs, tail_embs, rels_embs, len(edge_type))
-        pos_score, neg_score = self.KGEmodel(head_embs, tail_embs, rels_embs, edge_type_expand, len(interaction["edge_types"]), self.W_R)
-        kge_loss = self.KGEloss(pos_score, neg_score)
+        kg_loss = (-1.0) * F.logsigmoid(neg_score - pos_score)
+        kg_loss = torch.mean(kg_loss)
 
         kge_reg_loss = self.reg_loss(
-            head_embs,
-            tail_embs,
-            rels_embs,
+            h_embed,
+            r_embed,
+            pos_t_embed,
+            neg_t_embed,
             require_pow=True
         )
-        loss = kge_loss + self.reg_weight * kge_reg_loss
-        return loss, kge_loss
-
-    def _get_type_weights(self, graph_type):
-        '''
-        Get the type weights for different graphs
-        '''
-        return {
-            'uu' : self.W_R_uu,
-            'ii' : self.W_R_ii,
-            'ui' : self.W_R_ui
-        }[graph_type]
+        loss = kg_loss + self.reg_weight * kge_reg_loss
+        # loss = kg_loss
+        return loss
     
-    def _forward_aggregator(self, x, edge_index, edge_attr):
-        all_embs = []
-        for layer in self.aggregator_layers:
-            x = layer(x, edge_index, edge_attr)
-            norm_x = F.normalize(x, p=2, dim=1)
-            all_embs.append(norm_x)
-        all_embs = torch.cat(all_embs, dim=-1)
-        return all_embs
-
-    def _forward_lightgcn(self, norm_adj, ego_embeddings):
-        '''
-        Forward pass of LightGCN(Learning the ui embeddings)
-        '''
-        all_embeddings = [ego_embeddings]
-
-        for k in range(self.n_layers):
-            if isinstance(norm_adj, list):
-                ego_embeddings = torch_sp.mm(norm_adj[k], ego_embeddings)
+    def computer(self):
+        """
+        propagate methods for lightGCN
+        """
+        users_emb = self.embedding_entity.weight[:self.num_users]
+        items_emb = self.cal_item_embedding_from_kg(self.kg_dict)
+        all_emb = torch.cat([users_emb, items_emb])
+        embs = [all_emb]
+        if self.args['dropout']:
+            if self.training:
+                g_droped = self.__dropout(self.keep_prob)
             else:
-                ego_embeddings = torch_sp.mm(norm_adj, ego_embeddings)
-            all_embeddings += [ego_embeddings]
+                g_droped = self.Graph
+        else:
+            g_droped = self.Graph
+        for layer in range(self.n_layers):
+            all_emb = torch.sparse.mm(g_droped, all_emb)
+            embs.append(all_emb)
+        embs = torch.stack(embs, dim=1)
+        # print(embs.size())
+        light_out = torch.mean(embs, dim=1)
+        return light_out
 
-        all_embeddings = torch.stack(all_embeddings, dim=1).mean(dim=1)
-        user_embeddings, item_embeddings = torch.split(all_embeddings, [self.num_users, self.num_items], dim=0)
-
-        return user_embeddings, item_embeddings
- 
-    def getUsersRating(self, users, all_edge_index, all_edge_type):
-        all_edge_index, all_edge_type = all_edge_index.to(self.device), all_edge_type.to(self.device)
-        all_edge_attr = self._collect_edge_att(['ui'], [all_edge_index], [all_edge_type])
-        all_embs = self._forward_aggregator(self.ent_embeddings_kge.weight, all_edge_index, all_edge_attr)
-        users_emb = all_embs[users]
-        items_emb = all_embs[self.num_users : self.num_users + self.num_items]
-        #rating = self.rate_act_fn(torch.matmul(users_emb, items_emb.T))
-        rating = torch.matmul(users_emb, items_emb.T)
+    def getUsersRating(self, users):
+        all_embs = self.computer()
+        users_emb = all_embs[users.long()]
+        items_emb = all_embs[self.num_users:]
+        rating = self.f(torch.matmul(users_emb, items_emb.t()))
         return rating
     
-    # def pretrain_kg_embeddings(self, edge_indexs, edge_types):
-    #     merged_edge_index = torch.cat(edge_indexs, dim=1)
-    #     merged_edge_type = torch.cat(edge_types)
-    #     rels_for_reg = self.rel_embeddings(merged_edge_type.unique().to(self.device))
-    #     edge_index_expand, edge_type_expand = self.Neg_Sampler.Triples_neg_sample(merged_edge_index, merged_edge_type)
-    #     edge_index_expand = edge_index_expand.to(self.device)
-    #     edge_type_expand = edge_type_expand.to(self.device)
+    def getEmbedding(self, users, pos_items, neg_items):
+        all_embs = self.computer()
+        users_emb = all_embs[users]
+        pos_emb = all_embs[pos_items]
+        neg_emb = all_embs[neg_items]
+        # users_emb_ego = self.embedding_entity(users)
+        # pos_emb_ego = self.embedding_entity(pos_items)
+        # neg_emb_ego = self.embedding_entity(neg_items)
+        return users_emb, pos_emb, neg_emb
     
-    #     head = self.ent_embeddings_kge(edge_index_expand[0].long())
-    #     tail = self.ent_embeddings_kge(edge_index_expand[1].long())
-    #     rels = self.rel_embeddings(edge_type_expand)
+    def calc_bpr_loss(self, users, pos_items, neg_items):
+        (users_emb, posi_emb, negi_emb) = \
+        self.getEmbedding(users.long(), pos_items.long(), neg_items.long())
 
-    #     pos_score, neg_score = self.KGEmodel(head, tail, rels, len(merged_edge_type))
-    #     #pos_score, neg_score = self.KGEmodel(head, tail, rels, edge_type_expand, len(merged_edge_type))
-    #     kge_loss = self.KGEloss(pos_score, neg_score)
-    #     reg_loss = l2_loss(
-    #                     head,
-    #                     tail,
-    #                     rels
-    #                 )
-    #     loss = kge_loss + self.reg_weight * reg_loss
-    #     return loss, kge_loss
+        pos_scores = inner_product(users_emb, posi_emb)
+        neg_scores = inner_product(users_emb, negi_emb)
+
+        bpr_loss = self.mf_loss(pos_scores, neg_scores)
+        reg_loss = self.reg_loss(
+            users_emb,
+            posi_emb,
+            negi_emb,
+            require_pow=True
+        )
+        loss = bpr_loss + self.reg_weight * reg_loss
+        return loss, bpr_loss
     
-    def generate_entity_relation_embeddings(self, save_path):
-        import os
-        all_embs = self._forward_aggregator()
-        ent_embs = all_embs.cpu().detach().numpy()
-        rel_embs = self.rel_embeddings.weight.cpu().detach().numpy()
-        np.savez(os.path.join(save_path, 'ent_rel_embs.npz'), ent_embs=ent_embs, rel_embs=rel_embs)
+    def view_computer_all(self, g_droped, kg_droped):
+        """
+        propagate methods for contrastive lightGCN
+        """
+        users_emb = self.embedding_entity.weight[:self.num_users]
+        items_emb = self.cal_item_embedding_from_kg(kg_droped)
+        all_emb = torch.cat([users_emb, items_emb])
+        #   torch.split(all_emb , [self.num_users, self.num_items])
+        embs = [all_emb]
+        for layer in range(self.n_layers):
+            all_emb = torch.sparse.mm(g_droped, all_emb)
+            embs.append(all_emb)
+        embs = torch.stack(embs, dim=1)
+        light_out = torch.mean(embs, dim=1)
+        user_embs, item_embs = torch.split(light_out, [self.num_users, self.num_items])
+        return user_embs, item_embs
+
+    def cal_item_embedding_from_kg(self, kg: dict):
+        if kg is None:
+            kg = self.kg_dict
+
+        if (self.kgcn == "GAT"):
+            return self.cal_item_embedding_gat(kg)
+        elif self.kgcn == "RGAT":
+            return self.cal_item_embedding_rgat(kg)
+        elif (self.kgcn == "MEAN"):
+            return self.cal_item_embedding_mean(kg)
+        elif (self.kgcn == "NO"):
+            return self.embedding_entity.weight[self.num_users:self.num_users+self.num_items]
+        
+    def cal_item_embedding_rgat(self, kg: dict):
+        item_embs = self.embedding_entity(torch.IntTensor(
+            list(kg.keys())).to(self.device))  # item_num, emb_dim
+        # item_num, entity_num_each
+        item_entities = torch.stack(list(kg.values()))
+        item_relations = torch.stack(list(self.item2relations.values()))
+        # item_num, entity_num_each, emb_dim
+        entity_embs = self.embedding_entity(item_entities)
+        relation_embs = self.embedding_relation(
+            item_relations)  # item_num, entity_num_each, emb_dim
+        # w_r = self.W_R[relation_embs] # item_num, entity_num_each, emb_dim, emb_dim
+        # item_num, entity_num_each
+        padding_mask = torch.where(item_entities != self.num_entities, torch.ones_like(
+            item_entities), torch.zeros_like(item_entities)).float()
+        return self.gat.forward_relation(item_embs, entity_embs, relation_embs, padding_mask)
+
+    def cal_item_embedding_mean(self, kg: dict):
+        item_embs = self.embedding_entity(torch.IntTensor(
+            list(kg.keys())).to(self.device))  # item_num, emb_dim
+        # item_num, entity_num_each
+        item_entities = torch.stack(list(kg.values()))
+        # item_num, entity_num_each, emb_dim
+        entity_embs = self.embedding_entity(item_entities)
+        # item_num, entity_num_each
+        padding_mask = torch.where(item_entities != self.num_entities, torch.ones_like(
+            item_entities), torch.zeros_like(item_entities)).float()
+        # padding为0
+        entity_embs = entity_embs * \
+            padding_mask.unsqueeze(-1).expand(entity_embs.size())
+        # item_num, emb_dim
+        entity_embs_sum = entity_embs.sum(1)
+        entity_embs_mean = entity_embs_sum / \
+            padding_mask.sum(-1).unsqueeze(-1).expand(entity_embs_sum.size())
+        # replace nan with zeros
+        entity_embs_mean = torch.nan_to_num(entity_embs_mean)
+        # item_num, emb_dim
+        return item_embs+entity_embs_mean
+    
+    def __dropout_x(self, x, keep_prob):
+        size = x.size()
+        index = x.indices().t()
+        values = x.values()
+        random_index = torch.rand(len(values)) + keep_prob
+        random_index = random_index.int().bool()
+        index = index[random_index]
+        values = values[random_index]/keep_prob
+        g = torch.sparse_coo_tensor(index.t(), values, size)
+        return g
+
+    def __dropout(self, keep_prob):
+        if self.A_split:
+            graph = []
+            for g in self.Graph:
+                graph.append(self.__dropout_x(g, keep_prob))
+        else:
+            graph = self.__dropout_x(self.Graph, keep_prob)
+        return graph
 
