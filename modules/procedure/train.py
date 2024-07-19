@@ -8,7 +8,7 @@ from collections import deque, defaultdict
 from tqdm import trange
 #from ..data import LLM_import_path
 from ..utils import triples_transfer_to_graph, WandBLogger
-from .test import Test
+from .test import Test, Test_origin
 from .procedure import *
 
 
@@ -20,12 +20,13 @@ def Train(
         contrast_model, 
         optimizer, 
         scheduler):
-    logger = WandBLogger(
-        config=WandBLogger.get_default_config(),
-        variant=args,
-    )
+    if args['wandb']:
+        logger = WandBLogger(
+            config=WandBLogger.get_default_config(),
+            variant=args,
+        )
     device = args['device']
-    best_result = 0.
+    best_result = dict({'recall@10' : 0.})
 
     for epoch in tqdm(range(args['epoch']), disable=False):
         start = time.time()
@@ -47,37 +48,43 @@ def Train(
         if (epoch + 1) % args['eval_interval'] == 0:
             print("[Valid]")
             results_val = Test(args, rec_data, model, 'valid', args['device'])
+            #results_val = Test_origin(args, rec_data, model, 'valid')
+
             print("[TEST]")
             results_test = Test(args, rec_data, model, 'test', args['device'])
+            
+            if args['wandb']:
+                logger.log({
+                    'epoch' : epoch + 1,
+                    'Precision(Val)' : results_val['precision@10'],
+                    'Recall(Val)' : results_val['recall@10'],
+                    'ndcg@10(Val)' : results_val['ndcg@10'],
+                    'Precision(Test)' : results_test['precision@10'],
+                    'Recall(Test)' : results_test['recall@10'],
+                    'ndcg@10(Test)' : results_test['ndcg@10'],
+                    'Total loss' : total_loss,
+                    'BPR loss' : bpr_loss,
+                    'CON loss' : con_loss,
+                    'KGE loss' : kge_loss
+                })
 
-            logger.log({
-                'epoch' : epoch + 1,
-                'Precision(Val)' : results_val['precision@10'],
-                'Recall(Val)' : results_val['recall@10'],
-                'ndcg@10(Val)' : results_val['ndcg@10'],
-                'Precision(Test)' : results_test['precision@10'],
-                'Recall(Test)' : results_test['recall@10'],
-                'ndcg@10(Test)' : results_test['ndcg@10'],
-                'Total loss' : total_loss,
-                'BPR loss' : bpr_loss,
-                'CON loss' : con_loss,
-                'KGE loss' : kge_loss
-            })
-
-            if results_test["recall@10"] > best_result:
+            if results_test["recall@10"] > best_result["recall@10"]:
                 stopping_step = 0
-                best_result = results_test["recall@10"]
+                best_result = results_test
                 print("find a better model")
                 model.save_checkpoint(
                     args['save_path'] + f"{type(model).__name__}_{args['data']['name']}.ckpt")
 
-            else:
-                stopping_step += 1
-                if stopping_step >= args['early_stop_epoch']:
-                    print(f"early stop triggerd at epoch {epoch}")
-                    break
-        
+            # else:
+            #     if epoch >= 50:
+            #         stopping_step += 1
+            #         if stopping_step >= args['early_stop_epoch']:
+            #             print(f"early stop triggerd at epoch {epoch}, the best result is {best_result}")
+            #             break
+
         scheduler.step()
+
+    print(f'Finish Training, the best result is {best_result}')
 
 def TrainLightGCN(args, model, data_loader, rec_data, extractor, optimizer, scheduler, device):
     steps_per_epoch = len(data_loader)

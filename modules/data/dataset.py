@@ -48,10 +48,10 @@ class KGDataset(torch.utils.data.Dataset):
         heads = list(kg_dict.keys())
         return kg_dict, heads
 
-    def get_kg_dict(self, item_num, device):
+    def get_kg_dict(self, device):
         i2es = dict()
         i2rs = dict()
-        for item in range(item_num):
+        for item in range(self.num_users, self.num_users + self.num_items):
             rts = self.kg_dict.get(item, False)
             if rts:
                 tails = list(map(lambda x:x[1], rts))
@@ -65,9 +65,9 @@ class KGDataset(torch.utils.data.Dataset):
                     relations.extend([self.num_relation]*(self.entity_num-len(relations)))
                     i2es[item] = torch.IntTensor(tails).to(device)
                     i2rs[item] = torch.IntTensor(relations).to(device)
-            else:
-                i2es[item] = torch.IntTensor([self.num_entity]*self.entity_num).to(device)
-                i2rs[item] = torch.IntTensor([self.num_relation]*self.entity_num).to(device)
+            # else:
+            #     i2es[item] = torch.IntTensor([self.num_entity]*self.entity_num).to(device)
+            #     i2rs[item] = torch.IntTensor([self.num_relation]*self.entity_num).to(device)
         return i2es, i2rs
 
     def __len__(self):
@@ -295,7 +295,13 @@ class RecTrainDataset(torch.utils.data.Dataset):
         #user_id_negsampled, item_id_negsampled = self._sampler.neg_sample_fn(user_id, item_id)
         #review = self.trainset.iloc[idx][data_config[self.name]['review']]
         #return user_id_negsampled, item_id_negsampled, review
-        neg_id = self.negative_sample(torch.Tensor([user_id]).long(), torch.Tensor([item_id]).long())
+        #neg_id = self.negative_sample(torch.Tensor([user_id]).long(), torch.Tensor([item_id]).long())
+        while True:
+            neg_id = np.random.randint(self.num_users, self.num_users + self.num_items)
+            if neg_id in self.u_of_i[user_id]:
+                continue
+            else:
+                break
         return user_id, item_id, neg_id
 
     def negative_sample(self, users:torch.Tensor, items:torch.Tensor):
@@ -315,13 +321,8 @@ class RecTrainDataset(torch.utils.data.Dataset):
 
     def _create_adj(self):
         nodes_num = self.num_users + self.num_items
-        users_np = np.array([
-            self.ent2id[self.trainset.iloc[idx][data_config[self.name]['user']]] for idx in range(len(self.trainset))
-        ])
-        items_np = np.array([
-            self.ent2id[self.trainset.iloc[idx][data_config[self.name]['item']]] for idx in range(len(self.trainset))
-        ])   
-
+        users_np = self.user_np
+        items_np = self.item_np
         ratings = np.ones_like(users_np, dtype=np.float32)
         tmp_adj = sp.csr_matrix((ratings, (users_np, items_np)), shape=(nodes_num, nodes_num))
         adj_mat = tmp_adj + tmp_adj.T

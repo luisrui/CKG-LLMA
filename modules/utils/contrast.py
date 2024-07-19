@@ -87,18 +87,18 @@ class Contrast(nn.Module):
         return view1, view2
 
     def get_ui_views_weighted(self, item_stabilities):
-        graph = self.model.Graph
-        n_users = self.num_users
+        # graph = self.model.Graph
+        # n_users = self.num_users
 
-        # generate mask
-        item_degrees = degree(graph.indices()[0])[n_users:].tolist()
-        deg_col = torch.FloatTensor(item_degrees).to(self.device)
-        s_col = torch.log(deg_col)
-        # degree normalization
-        # deg probability of keep
-        degree_weights = (s_col - s_col.min()) / (s_col.max() - s_col.min())
-        degree_weights = degree_weights.where(
-            degree_weights > 0.3, torch.ones_like(degree_weights) * 0.3)  # p_tau
+        # # generate mask
+        # item_degrees = degree(graph.indices()[0])[n_users:].tolist()
+        # deg_col = torch.FloatTensor(item_degrees).to(self.device)
+        # s_col = torch.log(deg_col)
+        # # degree normalization
+        # # deg probability of keep
+        # degree_weights = (s_col - s_col.min()) / (s_col.max() - s_col.min())
+        # degree_weights = degree_weights.where(
+        #     degree_weights > 0.3, torch.ones_like(degree_weights) * 0.3)  # p_tau
 
         # kg probability of keep
         item_stabilities = torch.exp(item_stabilities)

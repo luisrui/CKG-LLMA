@@ -2,6 +2,8 @@ from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
 
 import torch
+from ..model import KLMCR
+from ..utils import Contrast
 
 def TransR_train(args, kg_train_data, Recmodel, opt, device):
     Recmodel.train()
@@ -23,8 +25,8 @@ def TransR_train(args, kg_train_data, Recmodel, opt, device):
 def BPR_train_contrast(
         args, 
         rec_data, 
-        Recmodel, 
-        contrast_model, 
+        Recmodel : KLMCR, 
+        contrast_model : Contrast, 
         contrast_views, 
         optimizer):
     Recmodel.train()
@@ -75,6 +77,7 @@ def BPR_train_contrast(
             con_loss += l_ssl.cpu().item()
         else:
             l_all = l_bpr_reg
+
         optimizer.zero_grad()
         l_all.backward()
         optimizer.step()

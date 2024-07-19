@@ -4,6 +4,7 @@ data:
       name: 'AmazonBook'
 ### Training Ablation
 Train : True
+wandb : False
 LoadPretrain : 0
 KGPretrain : 0
 ### Training Configuations

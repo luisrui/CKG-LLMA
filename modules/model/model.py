@@ -68,8 +68,7 @@ class KLMCR(BasicModel):
         self.f = nn.Sigmoid()
         self.Graph = rec_data.get_norm_adj.to(self.device)
         # self.ItemNet = self.kg_dataset.get_item_net_from_kg(self.num_items)
-        self.kg_dict, self.item2relations = kg_data.get_kg_dict(
-            self.num_items, self.device)
+        self.kg_dict, self.item2relations = kg_data.get_kg_dict(self.device)
         #self.kg_dict = kg_data.kg_dict
 
     def calc_kg_loss_transE(self, h, r, pos_t, neg_t):

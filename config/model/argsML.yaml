@@ -4,17 +4,18 @@ data:
       name: 'MovieLens1M'
 ### Training Ablation
 Train : True
+wandb : False
 LoadPretrain : 0
 KGPretrain : 0
 ### Training Configuations
 epoch : 1000
 start_epoch : 0
-seed : 114
+seed : 2020
 learning_rate : 0.0001
 batch_size : 32
 dataloader_n_workers : 8
 embedding_dim : 64
-hidden_embedding_dim : 256
+# hidden_embedding_dim : 256
 loss_reg_weight : 0.0001
 ### Model Setting(Subgraph Extraction)
 max_sample_neighbors : 3
@@ -23,17 +24,17 @@ train_kge : True
 kge_batch_size : 1024
 kg_neg_size : 100
 train_interval_kge : 1
-entity_num_per_item : 10
+entity_num_per_item : 9
 kgcn : 'RGAT'
 kgc_temperatue : 0.2
-kg_p_drop : 0.5
+kg_p_drop : 0.4
 ### Model Setting(BPR Training)
-bpr_batch_size : 1024
-lightGCN_n_layers : 2
+bpr_batch_size : 2048
+lightGCN_n_layers : 3
 dropout : True
-keep_prob : 0.6
+keep_prob : 0.8
 A_split : False
-ui_p_drop : 0.01
+ui_p_drop : 0.001
 #### Constrastive Learning
 start_step : 0
 end_step : 0
