@@ -274,8 +274,7 @@ def Translate_modify2id(modify_json, ent2id, rel2id):
         'add': add_list_id
     }
     
-
-def Read_prompt(initial_query : str, pos_items, neg_items, id2ent : dict, id2rel : dict, selected_triples : list):
+def Read_prompt(dataset:str, initial_query : str, pos_items, neg_items, id2ent : dict, id2rel : dict, selected_triples : list):
     '''
     Generate graph prompts based on kg triples and logics.
     '''
@@ -283,7 +282,7 @@ def Read_prompt(initial_query : str, pos_items, neg_items, id2ent : dict, id2rel
 
     items = np.concatenate([pos_items, neg_items], axis=0)
     items = np.unique(items)
-    id2name = json.load(open('./dataset/MovieLens1M/id2name.json', 'r'))
+    id2name = json.load(open(f'./dataset/{dataset}/id2name.json', 'r'))
     items_title = {id2ent[item]:id2name[id2ent[item]] for item in items}
     items_title_text = str(items_title).replace(': ', ':').replace(', ',',')
     
@@ -318,5 +317,6 @@ def Aug_graph(triples, num_users, num_items, ent2id, rel2id, aug_ratio, aug_type
         
         return augmented_triples
 
-    
+def Generate_rectify_info():
+    return
     

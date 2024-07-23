@@ -47,3 +47,15 @@ class BasicModel(nn.Module):
             parameters[i] = torch.Tensor(parameters[i])
         self.load_state_dict(parameters, strict = False)
         self.eval()
+
+class Sampler(object):
+    """Base class for all sampler to sample negative items.
+    """
+    def __init__(self):
+        pass
+
+    def __len__(self):
+        raise NotImplementedError
+
+    def __iter__(self):
+        raise NotImplementedError

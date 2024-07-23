@@ -1,7 +1,7 @@
-cuda: 6
+cuda: 5
 data:
       path: './dataset'
-      name: 'AmazonBook'
+      name: 'Steam'
 ### Training Ablation
 Train : True
 wandb : False

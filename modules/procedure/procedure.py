@@ -42,7 +42,8 @@ def BPR_train_contrast(
     # For SGL
     uiv1, uiv2 = contrast_views["uiv1"], contrast_views["uiv2"]
     kgv1, kgv2 = contrast_views["kgv1"], contrast_views["kgv2"]
-    for batch_i, train_data in tqdm(enumerate(dataloader), total=len(dataloader), disable=True):
+    relv1, relv2 = contrast_views["relv1"], contrast_views["relv2"]
+    for batch_i, train_data in tqdm(iterable=enumerate(dataloader), total=len(dataloader), disable=True):
         batch_users = train_data[0].long().to(device)
         batch_pos = train_data[1].long().to(device)
         batch_neg = train_data[2].long().to(device)
@@ -53,8 +54,8 @@ def BPR_train_contrast(
         l_ssl = list()
         items = batch_pos  # [B*1]
 
-        usersv1_ro, itemsv1_ro = Recmodel.view_computer_all(uiv1, kgv1)
-        usersv2_ro, itemsv2_ro = Recmodel.view_computer_all(uiv2, kgv2)
+        usersv1_ro, itemsv1_ro = Recmodel.view_computer_all(uiv1, kgv1, relv1)
+        usersv2_ro, itemsv2_ro = Recmodel.view_computer_all(uiv2, kgv2, relv2)
 
         # from SGL source
         items_uiv1 = itemsv1_ro[items - rec_data.num_users]
@@ -69,7 +70,7 @@ def BPR_train_contrast(
             users_uiv1, users_uiv2, usersv2_ro)
         # l_user = contrast_model.grace_loss(users_uiv1, users_uiv2)
         # L = l_bpr_reg + L_user + L_item + L_kg + R^2
-        l_ssl.extend([l_user*args['ssl_reg'], l_item*args['ssl_reg']])
+        l_ssl.extend([l_user*args['loss_con_weight'], l_item*args['loss_con_weight']])
 
         if l_ssl:
             l_ssl = torch.stack(l_ssl).sum()

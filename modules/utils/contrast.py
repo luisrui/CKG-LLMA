@@ -2,6 +2,7 @@ from cppimport import imp
 from numpy import negative, positive
 from torch_sparse.tensor import to
 from random import random, sample
+from ..model import KLMCR
 import torch
 import torch.nn as nn
 from torch_geometric.utils import degree, to_undirected
@@ -37,7 +38,7 @@ def drop_edge_weighted(edge_index, edge_weights, p: float = 0.3, threshold: floa
 class Contrast(nn.Module):
     def __init__(self, args, model, rec_data):
         super(Contrast, self).__init__()
-        self.model = model
+        self.model : KLMCR = model
         self.device = args['device']
         self.tau = args['kgc_temperatue']
         self.kg_p_drop = args['kg_p_drop']
@@ -47,7 +48,8 @@ class Contrast(nn.Module):
         self.num_items = self.model.num_items
         self.item_np = rec_data.item_np
         self.user_np = rec_data.user_np
-
+        self.ent2id = args['ent2id']
+        
     def projection(self, z: torch.Tensor) -> torch.Tensor:
         z = F.elu(self.fc1(z))
         return self.fc2(z)
@@ -78,13 +80,18 @@ class Contrast(nn.Module):
         loss = torch.sum(-torch.log(positive_pairs / negative_pairs))
         return loss
 
-    def get_kg_views(self):
-        kg = self.model.kg_dict
-        view1 = self.drop_edge_random(
-            kg, self.kg_p_drop, self.model.num_entities)
-        view2 = self.drop_edge_random(
-            kg, self.kg_p_drop, self.model.num_entities)
-        return view1, view2
+    def get_kg_views(self, rectify_info : dict):
+        h2t = self.model.kg_dict
+        h2r = self.model.item2relations
+        # view1 = self.drop_edge_random(
+        #     kg, self.kg_p_drop, self.model.num_entities)
+        view_ii, rel_ii = self.drop_LLM_rectify(
+            h2t, h2r, rectify_info, 'ii', self.model.num_entities, self.model.num_relations)
+        # view2, rel_v2 = self.drop_edge_random(
+        #     h2t, h2r, self.kg_p_drop, self.model.num_entities)
+        view_ui, rel_ui = self.drop_LLM_rectify(
+            h2t, h2r, rectify_info, 'ui', self.model.num_entities, self.model.num_relations)
+        return view_ii, rel_ii, view_ui, rel_ui
 
     def get_ui_views_weighted(self, item_stabilities):
         # graph = self.model.Graph
@@ -119,9 +126,9 @@ class Contrast(nn.Module):
         g_weighted.requires_grad = False
         return g_weighted
 
-    def item_kg_stability(self, view1, view2):
-        kgv1_ro = self.model.cal_item_embedding_from_kg(view1)
-        kgv2_ro = self.model.cal_item_embedding_from_kg(view2)
+    def item_kg_stability(self, view1, relv1, view2, relv2):
+        kgv1_ro = self.model.cal_item_embedding_from_kg(view1, relv1)
+        kgv2_ro = self.model.cal_item_embedding_from_kg(view2, relv2)
         sim = self.sim(kgv1_ro, kgv2_ro)
         return sim
     
@@ -172,38 +179,92 @@ class Contrast(nn.Module):
         g.requires_grad = False
         return g
 
-    def get_views(self, aug_side="both"):
+    def transform_origin_graph(self, graph):
+        # to coo
+        graph_vers = graph.cpu().coalesce()
+        indices = graph_vers.indices().numpy()
+        values = graph_vers.values().numpy()
+        shape = graph_vers.shape
+        graph_vers = sp.coo_matrix((values, (indices[0], indices[1])), shape=shape)
+
+        coo = graph_vers.tocoo().astype(np.float32)
+        row = torch.Tensor(coo.row).long()
+        col = torch.Tensor(coo.col).long()
+        index = torch.stack([row, col])
+        data = torch.FloatTensor(coo.data)
+        g = torch.sparse_coo_tensor(index, data, torch.Size(
+            coo.shape)).coalesce().to(self.device)
+        g.requires_grad = False
+        return g
+
+    def get_views(self, rectify_info, aug_side="both"):
         # drop (epoch based)
         # kg drop -> 2 views -> view similarity for item
         if aug_side == "ui":
             kgv1, kgv2 = None, None
         else:
-            kgv1, kgv2 = self.get_kg_views()
+            kgv1, relv1, kgv2, relv2 = self.get_kg_views(rectify_info)
 
         if aug_side == "kg":
             uiv1, uiv2 = None, None
         else:
-            stability = self.item_kg_stability(kgv1, kgv2).to(self.device)
-            # item drop -> 2 views
+            stability = self.item_kg_stability(kgv1, relv1, kgv2, relv2).to(self.device)
             uiv1 = self.get_ui_views_weighted(stability)
             uiv2 = self.get_ui_views_weighted(stability)
+            #uiv1, uiv2 = self.transform_origin_graph(self.model.Graph), self.transform_origin_graph(self.model.Graph)
 
         contrast_views = {
             "kgv1": kgv1,
             "kgv2": kgv2,
             "uiv1": uiv1,
-            "uiv2": uiv2
+            "uiv2": uiv2,
+            'relv1': relv1,
+            'relv2': relv2
         }
         return contrast_views
     
-    def drop_edge_random(self, item2entities, p_drop, padding):
+    def drop_edge_random(self, head2tail, head2rel, p_drop, padding):
         res = dict()
-        for item, es in item2entities.items():
+        rel = head2rel.copy()
+        for item, es in head2tail.items():
             new_es = list()
-            for e in es.tolist():
+            for e in es:
                 if (random() > p_drop):
                     new_es.append(e)
                 else:
                     new_es.append(padding)
             res[item] = torch.IntTensor(new_es).to(self.device)
-        return res
+            rel[item] = torch.IntTensor(rel[item]).to(self.device)
+        return res, rel
+    
+    def drop_LLM_rectify(self, head2tail, head2rel, rectify_info, subgraph:str, padding_e, padding_r):
+        tri2add = rectify_info[f'{subgraph}_add']
+        tri2del = rectify_info[f'{subgraph}_del']
+        res_t, res_r = head2tail.copy(), head2rel.copy()
+        for triple in tri2del:
+            try:
+                head, _, tail = triple
+                if isinstance(head, int) and isinstance(tail, int):
+                    if head not in res_t or tail not in res_t[head]:
+                        continue
+                    idx = res_t[head].index(tail)
+                    res_t[head].remove(tail)
+                    res_r[head].pop(idx)
+                    res_t[head].append(padding_e)
+                    res_r[head].append(padding_r)
+            except:
+                continue
+        for head, rel, tail in tri2add:
+            if isinstance(head, int) and isinstance(tail, int):
+                if head not in res_t or tail <= self.num_users + self.num_items: ## In case it is triples of other kinds, not i-a
+                    continue
+                if padding_e in res_t[head]:
+                    idx = res_t[head].index(padding_e)
+                    res_t[head].remove(padding_e)
+                    res_r[head].pop(idx)
+                    res_t[head].append(tail)
+                    res_r[head].append(rel - 1) ## relation remapping
+        for key in res_t:
+            res_t[key] = torch.IntTensor(res_t[key]).to(self.device)
+            res_r[key] = torch.IntTensor(res_r[key]).to(self.device)
+        return res_t, res_r

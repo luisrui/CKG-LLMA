@@ -69,6 +69,10 @@ class KLMCR(BasicModel):
         self.Graph = rec_data.get_norm_adj.to(self.device)
         # self.ItemNet = self.kg_dataset.get_item_net_from_kg(self.num_items)
         self.kg_dict, self.item2relations = kg_data.get_kg_dict(self.device)
+        self.i2r_cal, self.i2t_cal = self.item2relations.copy(), self.kg_dict.copy()
+        for item in self.i2r_cal:
+            self.i2r_cal[item] = torch.IntTensor(self.i2r_cal[item]).to(self.device)
+            self.i2t_cal[item] = torch.IntTensor(self.i2t_cal[item]).to(self.device)
         #self.kg_dict = kg_data.kg_dict
 
     def calc_kg_loss_transE(self, h, r, pos_t, neg_t):
@@ -108,7 +112,7 @@ class KLMCR(BasicModel):
         propagate methods for lightGCN
         """
         users_emb = self.embedding_entity.weight[:self.num_users]
-        items_emb = self.cal_item_embedding_from_kg(self.kg_dict)
+        items_emb = self.cal_item_embedding_from_kg(self.i2t_cal, self.i2r_cal)
         all_emb = torch.cat([users_emb, items_emb])
         embs = [all_emb]
         if self.args['dropout']:
@@ -160,12 +164,14 @@ class KLMCR(BasicModel):
         loss = bpr_loss + self.reg_weight * reg_loss
         return loss, bpr_loss
     
-    def view_computer_all(self, g_droped, kg_droped):
+    def view_computer_all(self, g_droped, kg_droped, rel_droped=None):
         """
         propagate methods for contrastive lightGCN
         """
+        if rel_droped is None:
+            rel_droped = self.i2r_cal
         users_emb = self.embedding_entity.weight[:self.num_users]
-        items_emb = self.cal_item_embedding_from_kg(kg_droped)
+        items_emb = self.cal_item_embedding_from_kg(kg_droped, rel_droped)
         all_emb = torch.cat([users_emb, items_emb])
         #   torch.split(all_emb , [self.num_users, self.num_items])
         embs = [all_emb]
@@ -177,25 +183,27 @@ class KLMCR(BasicModel):
         user_embs, item_embs = torch.split(light_out, [self.num_users, self.num_items])
         return user_embs, item_embs
 
-    def cal_item_embedding_from_kg(self, kg: dict):
-        if kg is None:
-            kg = self.kg_dict
+    def cal_item_embedding_from_kg(self, head2tail: dict, head2rel:dict = None):
+        if head2tail is None:
+            head2tail = self.kg_dict
 
         if (self.kgcn == "GAT"):
-            return self.cal_item_embedding_gat(kg)
+            return self.cal_item_embedding_gat(head2tail)
         elif self.kgcn == "RGAT":
-            return self.cal_item_embedding_rgat(kg)
+            return self.cal_item_embedding_rgat(head2tail, head2rel)
         elif (self.kgcn == "MEAN"):
-            return self.cal_item_embedding_mean(kg)
+            return self.cal_item_embedding_mean(head2tail)
         elif (self.kgcn == "NO"):
             return self.embedding_entity.weight[self.num_users:self.num_users+self.num_items]
         
-    def cal_item_embedding_rgat(self, kg: dict):
+    def cal_item_embedding_rgat(self, kg: dict, head2rel:dict = None):
+        if head2rel is None:
+            head2rel = self.i2r_cal
         item_embs = self.embedding_entity(torch.IntTensor(
             list(kg.keys())).to(self.device))  # item_num, emb_dim
         # item_num, entity_num_each
         item_entities = torch.stack(list(kg.values()))
-        item_relations = torch.stack(list(self.item2relations.values()))
+        item_relations = torch.stack(list(head2rel.values()))
         # item_num, entity_num_each, emb_dim
         entity_embs = self.embedding_entity(item_entities)
         relation_embs = self.embedding_relation(

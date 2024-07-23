@@ -5,11 +5,13 @@ import torch
 import torch_geometric
 from torch_geometric.data import Data
 import random
+import pickle
 import os
 import json
 from collections import (defaultdict, Iterable, OrderedDict)
 from tqdm import tqdm
 from ..utils import sp_mat_to_sp_tensor
+from ..model import Sampler
 from .data_config import data_config
 try:     
     from cppimport import imp_from_filepath
@@ -57,14 +59,18 @@ class KGDataset(torch.utils.data.Dataset):
                 tails = list(map(lambda x:x[1], rts))
                 relations = list(map(lambda x:x[0], rts))
                 if(len(tails) > self.entity_num):
-                    i2es[item] = torch.IntTensor(tails).to(device)[:self.entity_num]
-                    i2rs[item] = torch.IntTensor(relations).to(device)[:self.entity_num]
+                    # i2es[item] = torch.IntTensor(tails).to(device)[:self.entity_num]
+                    # i2rs[item] = torch.IntTensor(relations).to(device)[:self.entity_num]
+                    i2es[item] = tails[:self.entity_num]
+                    i2rs[item] = relations[:self.entity_num]
                 else:
                     # last embedding pos as padding idx
                     tails.extend([self.num_entity]*(self.entity_num-len(tails)))
                     relations.extend([self.num_relation]*(self.entity_num-len(relations)))
-                    i2es[item] = torch.IntTensor(tails).to(device)
-                    i2rs[item] = torch.IntTensor(relations).to(device)
+                    # i2es[item] = torch.IntTensor(tails).to(device)
+                    # i2rs[item] = torch.IntTensor(relations).to(device)
+                    i2es[item] = tails
+                    i2rs[item] = relations
             # else:
             #     i2es[item] = torch.IntTensor([self.num_entity]*self.entity_num).to(device)
             #     i2rs[item] = torch.IntTensor([self.num_relation]*self.entity_num).to(device)
@@ -376,18 +382,46 @@ class RecTrainDataset(torch.utils.data.Dataset):
         edge_type = torch.tensor([self.rel2id['liked']] * len(edge_index[0]), dtype=torch.long)
         return edge_index, edge_type
 
-class Sampler(object):
-    """Base class for all sampler to sample negative items.
-    """
-    def __init__(self):
-        pass
+class LLMRectifyDataset(torch.utils.data.Dataset):
+    '''
+    '''
+    def __init__(self, args):
+        print('Loading LLM Enhanced Information...')
+        self._LLM_info_dir = args['LLM_info_path']
+        self._LLM_file = args['LLM_file']
+        # with open(os.path.join(self._LLM_info_dir, self._LLM_ui_file), 'rb') as f:
+        #     self.LLM_info_ui = pickle.load(f)
+        with open(os.path.join(self._LLM_info_dir, self._LLM_file), 'rb') as f:
+            self.LLM_info = pickle.load(f)
 
     def __len__(self):
-        raise NotImplementedError
-
-    def __iter__(self):
-        raise NotImplementedError
-
+        return len(self.LLM_info['ii'])
+    
+    def __getitem__(self, idx):
+        edit_ii = self.LLM_info['ii'][idx]
+        ii_add = edit_ii['add']
+        ii_del = edit_ii['delete']
+        edit_ui = self.LLM_info['ui'][idx]
+        ui_add = edit_ui['add']
+        ui_del = edit_ui['delete']
+        return ii_add, ii_del, ui_add, ui_del
+    
+    def generate_batch(self, idxs):
+        ii_add = [tuple(item) for idx in idxs for item in self.LLM_info['ii'][idx]['add']]
+        ii_del = [tuple(item) for idx in idxs for item in self.LLM_info['ii'][idx]['delete']]
+        ui_add = [tuple(item) for idx in idxs for item in self.LLM_info['ui'][idx]['add']]
+        ui_del = [tuple(item) for idx in idxs for item in self.LLM_info['ui'][idx]['delete']]
+        ii_add = list(set(ii_add))
+        ii_del = list(set(ii_del))
+        ui_add = list(set(ui_add))
+        ui_del = list(set(ui_del))
+        return {
+            'ii_add': ii_add,
+            'ii_del': ii_del,
+            'ui_add': ui_add,
+            'ui_del': ui_del
+        }
+    
 class PairwiseSampler(Sampler):
     '''
     Pairwise sampler to sample un-correlated items for each user. 

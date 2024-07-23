@@ -6,8 +6,9 @@ from tqdm import tqdm
 from collections import deque, defaultdict
 #from vllm import LLM, SamplingParams
 from tqdm import trange
+from itertools import cycle
 #from ..data import LLM_import_path
-from ..utils import triples_transfer_to_graph, WandBLogger
+from ..utils import triples_transfer_to_graph, WandBLogger, Contrast, Generate_rectify_info
 from .test import Test, Test_origin
 from .procedure import *
 
@@ -16,8 +17,9 @@ def Train(
         args, 
         model,
         rec_data, 
-        kg_train_data, 
-        contrast_model, 
+        kg_train_data,
+        LLM_rectify_data,
+        contrast_model : Contrast, 
         optimizer, 
         scheduler):
     if args['wandb']:
@@ -28,7 +30,9 @@ def Train(
     device = args['device']
     best_result = dict({'recall@10' : 0.})
 
-    for epoch in tqdm(range(args['epoch']), disable=False):
+    Infoloader = cycle(DataLoader(range(len(LLM_rectify_data)), batch_size=args['Recinfo_batch_size'], shuffle=False, num_workers=12, drop_last=True))
+
+    for epoch in tqdm(range(args['start_epoch'], args['epoch']), disable=False):
         start = time.time()
         # transR learning
         if epoch%args['train_interval_kge'] == 0 and args['train_kge']:
@@ -38,8 +42,9 @@ def Train(
         else:
             kge_loss = 0.
 
+        rectify_info = LLM_rectify_data.generate_batch(next(Infoloader))
+        contrast_views = contrast_model.get_views(rectify_info=rectify_info)
         # joint learning part
-        contrast_views = contrast_model.get_views()
         print("[Joint Learning]")
         (total_loss, bpr_loss, con_loss) = \
             BPR_train_contrast(args, rec_data, model, contrast_model, contrast_views, optimizer)
@@ -47,11 +52,11 @@ def Train(
 
         if (epoch + 1) % args['eval_interval'] == 0:
             print("[Valid]")
-            results_val = Test(args, rec_data, model, 'valid', args['device'])
+            results_val = Test(args, rec_data, model, 'valid')
             #results_val = Test_origin(args, rec_data, model, 'valid')
 
             print("[TEST]")
-            results_test = Test(args, rec_data, model, 'test', args['device'])
+            results_test = Test(args, rec_data, model, 'test')
             
             if args['wandb']:
                 logger.log({
@@ -217,27 +222,28 @@ def Generate_subgraphs(epochs, args, data_loader, extractor, rec_data):
     Generate subgraphs for training.
     '''
     subgraphs_collect = dict()
+    batch_size = args["extract_batch_size"]
 
     for e in tqdm(range(args['start_epoch'], epochs)):
 
         epoch_info = defaultdict(list)
         
-        for users, pos_items, _ in tqdm(data_loader):
-            neg_items = rec_data.negative_sample(users, pos_items)
-            subgraphs = extractor.sample_subgraph(
-                ["uu", "ui", "ii"], users, pos_items, neg_items
+        for users, pos_items, neg_items in tqdm(data_loader):
+            #neg_items = rec_data.negative_sample(users, pos_items)
+            subgraphs = extractor.sample_subgraph_origin(
+                ["ui", 'ii'], users, pos_items, neg_items
             )
-            print(subgraphs[0].__len__(), subgraphs[1].__len__(), subgraphs[2].__len__())
-            epoch_info['uu'].append(subgraphs[0])
-            epoch_info['ui'].append(subgraphs[1])
-            epoch_info['ii'].append(subgraphs[2])
+            print(subgraphs[0].__len__(), subgraphs[1].__len__())
+            #epoch_info['uu'].append(subgraphs[0])
+            epoch_info['ui'].append(subgraphs[0])
+            epoch_info['ii'].append(subgraphs[1])
             epoch_info['users'].append(users)
             epoch_info['pos_items'].append(pos_items)
             epoch_info['neg_items'].append(neg_items)
 
         subgraphs_collect[e] = epoch_info
 
-        with open(f'./saved_graphs/{rec_data.name}_{args["batch_size"]}_{args["max_sample_neighbors"]}_e{e}_v2.pkl', 'wb') as f:
+        with open(f'./saved_graphs/{rec_data.name}_{batch_size}_{args["max_sample_neighbors"]}_e{e}.pkl', 'wb') as f:
             pickle.dump(subgraphs_collect, f)
 
 def Pretrain_KG_Embeddings(total_epoch, args, model, data_loader, rec_data, optimizer, scheduler, device):

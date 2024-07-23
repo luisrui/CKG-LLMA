@@ -18,7 +18,7 @@ def test_one_batch(args, X):
             'precision':np.array(pre), 
             'ndcg':np.array(ndcg)}
 
-def Test(args, recdataset : RecTrainDataset, model, mode : str, device):
+def Test(args, recdataset : RecTrainDataset, model, mode : str):
     print(f'Model Evaluating for {mode} set')
     u_batch_size = args['test_u_batch_size']
     model.eval()

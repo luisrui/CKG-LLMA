@@ -9,39 +9,26 @@ import pickle
 import re
 import argparse
 
-# LLM_name = 'Llama2'
-# os.environ["CUDA_VISIBLE_DEVICES"] = "6,7"
+dataset = 'AmazonBook'
+# api_key = "sk-fVMV1dDzIHIwnVGK46986c6237094a03A638CfAe56D35561"
+# api_base = "https://bjqai.com/v1"
+base_url = 'https://chat.zhucn.org/v1/'
+api_key = 'sk-DvBuU0tMOS04pyw742167fFa029544E48d3626EaDc159a5b'
+client = OpenAI(api_key=api_key, base_url=api_key)
 
-# sampling_params = SamplingParams(temperature=0.5, top_p=0.95)
-# # 加载模型
-# llm = LLM(model=LLM_import_path[LLM_name], gpu_memory_utilization=0.8, tensor_parallel_size=2)
-
-# sampling_params = SamplingParams(
-#     temperature=0.5,
-#     top_p=0.95,
-#     max_tokens=None
-#     )
-
-                        # outputs = llm.generate(query, sampling_params)
-                        # output = outputs[0]
-                        # generated_text = output.outputs[0].text
-                        # while True:
-                        #     status, check_info_str = json_format_mining(generated_text)
-                        #     if status and len(check_info_str) != 2:
-                        #         break
-                        #     else:
-                        #         new_query = query + "please use 'add' and 'delete' as two keys and the related triples as values to form a single json file."
-                        #         outputs = llm.generate(new_query, sampling_params)
-                        #         output = outputs[0]
-                        #         generated_text = output.outputs[0].text
-                        # json_match = re.search(r"{.*}", text_response, re.DOTALL)
-                        # json_data = json_match.group()
-
-
-api_key = "sk-fVMV1dDzIHIwnVGK46986c6237094a03A638CfAe56D35561"
-api_base = "https://bjqai.com/v1"
-client = OpenAI(api_key=api_key, base_url=api_base)
-
+def get_json_answer(system_query, user_query, model_name='gpt-3.5-turbo'):
+    completion = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": system_query},
+                    {"role": "user", "content": user_query},
+                ],
+                temperature=0.2,
+                top_p=0.1,
+            )
+    text_response = completion.choices[0].message.content
+    text_response = text_response.replace("\n", "").replace("  ", "")
+    return text_response
 
 def json_format_mining(generated_text):
     try:
@@ -77,10 +64,15 @@ def main(total_epoch, start_step, end_step, enhanced_graph_path: dict, ent2id, r
     epoch_counter = trange(0, total_epoch, ncols=0)
     enhanced_graph_info = dict()
 
-    with open("modules/prompts/gpt_graph_prompt.txt", "r", encoding="utf-8") as f:
+    with open("modules/prompts/gpt_graph_prompt_ui.txt", "r", encoding="utf-8") as f:
         texts = f.readlines()
         system_query = texts[0][:-1]
-        user_query_initial = texts[1]
+        user_query_initial_ui = texts[1]
+    
+    with open("modules/prompts/gpt_graph_prompt_ii.txt", "r", encoding="utf-8") as f:
+        texts = f.readlines()
+        system_query = texts[0][:-1]
+        user_query_initial_ii = texts[1]
 
     id2ent = {v: k for k, v in ent2id.items()}
     id2rel = {v: k for k, v in rel2id.items()}
@@ -94,8 +86,7 @@ def main(total_epoch, start_step, end_step, enhanced_graph_path: dict, ent2id, r
             epoch_info["pos_items"],
             epoch_info["neg_items"],
         )
-        uu_graphs, ui_graphs, ii_graphs = (
-            epoch_info["uu"],
+        ui_graphs, ii_graphs = (
             epoch_info["ui"],
             epoch_info["ii"],
         )
@@ -108,10 +99,10 @@ def main(total_epoch, start_step, end_step, enhanced_graph_path: dict, ent2id, r
 
             # g_uu_prompt = Read_prompt(user_query_initial, pos_items, neg_items, id2ent, id2rel, uu_graph)
             g_ui_prompt = Read_prompt(
-                user_query_initial, pos_items, neg_items, id2ent, id2rel, ui_graph
+                dataset, user_query_initial_ui, pos_items, neg_items, id2ent, id2rel, ui_graph
             )
             g_ii_prompt = Read_prompt(
-                user_query_initial, pos_items, neg_items, id2ent, id2rel, ii_graph
+                dataset, user_query_initial_ii, pos_items, neg_items, id2ent, id2rel, ii_graph
             )
 
             for graph, query, g_type in zip(
@@ -119,22 +110,10 @@ def main(total_epoch, start_step, end_step, enhanced_graph_path: dict, ent2id, r
             ):
                 if len(graph) >= 50:
                     try:
-                        completion = client.chat.completions.create(
-                                model="gpt-3.5-turbo",
-                                messages=[
-                                    {"role": "system", "content": system_query},
-                                    {"role": "user", "content": query},
-                                ],
-                                temperature=0.2,
-                                top_p=0.1,
-                            )
-                        text_response = completion.choices[0].message.content
-                        text_response = text_response.replace("\n", "").replace("  ", "")
+                        text_response = get_json_answer(system_query, query, 'gpt-3.5-turbo')
                         json_match = re.search(r"{.*}", text_response, re.DOTALL)
                         json_data = json_match.group()
-
-                        # Replace the escaped single quotes with double quotes
-                        json_data = json_data.replace("'", '"').replace("\n", "")
+                        json_data = json_data.replace("'", '"').replace("\n", "")# Replace the escaped single quotes with double quotes
                         print(json_data)
                         modify_json = json.loads(text_response)
                         id_json = Translate_modify2id(modify_json, ent2id, rel2id)
@@ -144,25 +123,10 @@ def main(total_epoch, start_step, end_step, enhanced_graph_path: dict, ent2id, r
                         else:
                             print("tried again!")
                             try:
-                                completion = client.chat.completions.create(
-                                    model="gpt-3.5-turbo",
-                                    messages=[
-                                        {"role": "system", "content": system_query},
-                                        {
-                                            "role": "user",
-                                            "content": query + "Please generate a json file following the examples!",
-                                        },
-                                    ],
-                                    temperature=0.2,
-                                    top_p=0.1,
-                                )
-                                text_response = completion.choices[0].message.content
-                                text_response = text_response.replace("\n", "").replace("  ", "")
+                                text_response = get_json_answer(system_query, query, 'gpt-3.5-turbo')
                                 json_match = re.search(r"{.*}", text_response, re.DOTALL)
                                 json_data = json_match.group()
-
-                                # Replace the escaped single quotes with double quotes
-                                json_data = json_data.replace("'", '"').replace("\n", "")
+                                json_data = json_data.replace("'", '"').replace("\n", "")# Replace the escaped single quotes with double quotes
                                 print(json_data)
                                 modify_json = json.loads(text_response)
                                 id_json = Translate_modify2id(modify_json, ent2id, rel2id)
@@ -190,12 +154,6 @@ def main(total_epoch, start_step, end_step, enhanced_graph_path: dict, ent2id, r
 if __name__ == "__main__":
     parse = argparse.ArgumentParser()
     parse.add_argument(
-        "--argpath",
-        type=str,
-        default="argsML.yaml",
-        help="the relative path of argments file",
-    )
-    parse.add_argument(
         "--start_step",
         type=int,
         default="0",
@@ -207,24 +165,20 @@ if __name__ == "__main__":
     )
     config = parse.parse_args()
 
-    args = read_yaml(path=config.argpath)
-
     ent2id = json.load(
         open(
-            os.path.join(args["data"]["path"], args["data"]["name"], "entity2id.json"),
+            f"./dataset/{dataset}/entity2id.json",
             "r",
         )
     )
     rel2id = json.load(
         open(
-            os.path.join(
-                args["data"]["path"], args["data"]["name"], "relation2id.json"
-            ),
+            f"./dataset/{dataset}/relation2id.json",
             "r",
         )
     )
 
-    enhanced_graph_path = "MovieLens1M_10_2_e0_v2"
+    enhanced_graph_path = "AmazonBook_50_3_e0"
 
     enhanced_graph_info = main(1, config.start_step, config.end_step, enhanced_graph_path, ent2id, rel2id)
 
