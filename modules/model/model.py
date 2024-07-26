@@ -61,14 +61,14 @@ class KLMCR(BasicModel):
             nn.init.normal_(self.embedding_relation.weight, std=0.1)
         else:
             self.embedding_entity.weight.data.copy_(
-                torch.from_numpy(self.args['user_emb']))
+                torch.from_numpy(self.args['entity_emb']))
             self.embedding_relation.weight.data.copy_(
-                torch.from_numpy(self.args['item_emb']))
+                torch.from_numpy(self.args['relation_emb']))
             print('use pretrained data')
         self.f = nn.Sigmoid()
         self.Graph = rec_data.get_norm_adj.to(self.device)
         # self.ItemNet = self.kg_dataset.get_item_net_from_kg(self.num_items)
-        self.kg_dict, self.item2relations = kg_data.get_kg_dict(self.device)
+        self.kg_dict, self.item2relations = kg_data.get_kg_dict()
         self.i2r_cal, self.i2t_cal = self.item2relations.copy(), self.kg_dict.copy()
         for item in self.i2r_cal:
             self.i2r_cal[item] = torch.IntTensor(self.i2r_cal[item]).to(self.device)

@@ -6,8 +6,8 @@ from tqdm import tqdm
 from collections import deque, defaultdict
 #from vllm import LLM, SamplingParams
 from tqdm import trange
-from itertools import cycle
 #from ..data import LLM_import_path
+from ..data import ReshufflingLoader
 from ..utils import triples_transfer_to_graph, WandBLogger, Contrast, Generate_rectify_info
 from .test import Test, Test_origin
 from .procedure import *
@@ -30,30 +30,31 @@ def Train(
     device = args['device']
     best_result = dict({'recall@10' : 0.})
 
-    Infoloader = cycle(DataLoader(range(len(LLM_rectify_data)), batch_size=args['Recinfo_batch_size'], shuffle=False, num_workers=12, drop_last=True))
-
+    Infoloader = ReshufflingLoader(len(LLM_rectify_data), batch_size=args['Recinfo_batch_size'], shuffle=True, num_workers=12, drop_last=True)
     for epoch in tqdm(range(args['start_epoch'], args['epoch']), disable=False):
-        start = time.time()
-        # transR learning
+        # KGE learning
         if epoch%args['train_interval_kge'] == 0 and args['train_kge']:
             print("Train KGE:")
             kge_loss = TransR_train(args, kg_train_data, model, optimizer, device)
             print(f"trans Loss: {kge_loss:.3f}")
         else:
-            kge_loss = 0.
+            kge_loss = 0. 
 
+        # SSL learning(Contrstive + BPR)
         rectify_info = LLM_rectify_data.generate_batch(next(Infoloader))
+        #rectify_info = None
         contrast_views = contrast_model.get_views(rectify_info=rectify_info)
         # joint learning part
         print("[Joint Learning]")
+        # (total_loss, bpr_loss, con_loss, adj_loss) = \
+        #     BPR_train_contrast(args, rec_data, model, contrast_model, contrast_views, optimizer, epoch+1)
         (total_loss, bpr_loss, con_loss) = \
-            BPR_train_contrast(args, rec_data, model, contrast_model, contrast_views, optimizer)
+            BPR_train_contrast(args, rec_data, model, contrast_model, contrast_views, optimizer, epoch+1)
 
 
         if (epoch + 1) % args['eval_interval'] == 0:
             print("[Valid]")
             results_val = Test(args, rec_data, model, 'valid')
-            #results_val = Test_origin(args, rec_data, model, 'valid')
 
             print("[TEST]")
             results_test = Test(args, rec_data, model, 'test')
@@ -70,22 +71,23 @@ def Train(
                     'Total loss' : total_loss,
                     'BPR loss' : bpr_loss,
                     'CON loss' : con_loss,
-                    'KGE loss' : kge_loss
+                    'KGE loss' : kge_loss,
+                    # 'ADJ_loss' : adj_loss
                 })
 
             if results_test["recall@10"] > best_result["recall@10"]:
                 stopping_step = 0
                 best_result = results_test
-                print("find a better model")
+                print("Find a better model")
                 model.save_checkpoint(
                     args['save_path'] + f"{type(model).__name__}_{args['data']['name']}.ckpt")
 
-            # else:
-            #     if epoch >= 50:
-            #         stopping_step += 1
-            #         if stopping_step >= args['early_stop_epoch']:
-            #             print(f"early stop triggerd at epoch {epoch}, the best result is {best_result}")
-            #             break
+            else:
+                if epoch >= 100:
+                    stopping_step += 1
+                    if stopping_step >= args['early_stop_epoch']:
+                        print(f"early stop triggerd at epoch {epoch}, the best result is {best_result}")
+                        break
 
         scheduler.step()
 
@@ -223,7 +225,8 @@ def Generate_subgraphs(epochs, args, data_loader, extractor, rec_data):
     '''
     subgraphs_collect = dict()
     batch_size = args["extract_batch_size"]
-
+    total_steps = 3000
+    step = 0
     for e in tqdm(range(args['start_epoch'], epochs)):
 
         epoch_info = defaultdict(list)
@@ -240,6 +243,9 @@ def Generate_subgraphs(epochs, args, data_loader, extractor, rec_data):
             epoch_info['users'].append(users)
             epoch_info['pos_items'].append(pos_items)
             epoch_info['neg_items'].append(neg_items)
+            step += 1
+            if step == total_steps:
+                break
 
         subgraphs_collect[e] = epoch_info
 

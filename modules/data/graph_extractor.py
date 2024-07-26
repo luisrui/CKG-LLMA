@@ -161,7 +161,7 @@ class Extractor():
                 subgraph_ui = [list(triple) for triple in subgraph_ui]
                 end_time = time.time() 
                 print(f'UI time: {end_time - start_time}')
-                start_time = time.time()                
+                start_time = time.time()            
             elif aug_tupe == 'ii':
                  # Item -> Item Subgraph
                 # item_neighbors = [[(rel, nbr) for rel, nbr in self.i_of_i[item.item()] if nbr in batch_items] for item in batch_items]
@@ -184,25 +184,17 @@ class Extractor():
                 unique_items = set(batch_items.tolist())
                 tem_relations = {item: set((rel, tail) for rel, tail in self.i_of_i[item] if tail in unique_items) 
                               for item in unique_items}
-
                 # Add attributes for each unique item
                 subgraph_ii.extend([tuple([item, r, t]) for item in unique_items for r, t in self.i_of_a[item]])
+                target_add_relations = np.array([tuple([item, rel, tail]) for item in unique_items for rel, tail in tem_relations[item]])
+                keep_indices = np.random.choice(len(target_add_relations), len(target_add_relations)//10, replace=False)
+                target_add_relations = target_add_relations[keep_indices]
+                target_add_relations = [tuple(triple) for triple in target_add_relations]
                 # Find relations between items in the batch
-                subgraph_ii.extend([tuple([item, rel, tail]) for item in unique_items for rel, tail in tem_relations[item]])
+                subgraph_ii.extend(target_add_relations)
                 # Remove duplicates (if any) and convert to list of lists
                 subgraph_ii = set(subgraph_ii)
                 subgraph_ii = [list(triple) for triple in set(tuple(t) for t in subgraph_ii)]
-                
-                subgraph_ii_array = np.array(subgraph_ii)
-                if len(subgraph_ii_array) > 0:  # Check if the array is not empty
-                    unique_relations, relation_counts = np.unique(subgraph_ii_array[:, 1], return_counts=True)
-                    threshold = len(subgraph_ii_array) / 2
-                    relations_to_keep = unique_relations[relation_counts <= threshold]
-                    mask = np.isin(subgraph_ii_array[:, 1], relations_to_keep)
-                    subgraph_ii_filtered = subgraph_ii_array[mask].tolist()
-                    subgraph_ii = subgraph_ii_filtered
-                else:
-                    subgraph_ii = []
                 
                 end_time = time.time()
                 print(f'II time: {end_time - start_time}')

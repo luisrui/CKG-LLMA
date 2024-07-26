@@ -1,0 +1,57 @@
+cuda: 6
+data:
+      path: './dataset'
+      name: 'AmazonBook'
+### Training Ablation
+Train : True
+wandb : True
+LoadPretrain : 0
+KGPretrain : 0
+### Training Configuations
+epoch : 1000
+start_epoch : 0
+seed : 114
+learning_rate : 0.0001
+dataloader_n_workers : 8
+embedding_dim : 64
+# hidden_embedding_dim : 256
+loss_reg_weight : 0.0001
+### Model Setting(Subgraph Extraction)
+extract_batch_size : 50
+max_sample_neighbors : 3
+### Model Setting(KG Training)
+train_kge : True
+kge_batch_size : 1024
+kg_neg_size : 100
+train_interval_kge : 1
+entity_num_per_item : 15
+kgcn : 'RGAT'
+kgc_temperatue : 0.2
+kg_p_drop : 0.4
+### Model Setting(BPR Training)
+bpr_batch_size : 2048
+lightGCN_n_layers : 3
+dropout : True
+keep_prob : 0.8
+A_split : False
+ui_p_drop : 0.001
+#### Constrastive Learning
+LLM_info_path : '/data/cairui/KG-LLM-REC/saved_graphs/LLM_generated_info/'
+LLM_file: 'AmazonBook_50_3_e0_enhanced_0_2000.pkl'
+Recinfo_batch_size: 128
+confidence_random_drop : 0.3
+mix_ratio : 0.5
+con_temperature : 0.2
+loss_con_weight : 0.1
+### Evaluation
+eval_interval : 1
+topks : [10]
+test_u_batch_size : 128
+early_stop_epoch : 900
+metrics : ['precision', 'recall', 'ndcg']
+metric_decimal_place : 6
+### Saving
+special_save_hyper : 'bi-inter'
+load_path : ''
+save_path : '/data/cairui/KG-LLM-REC/checkpoint/Model/'
+save_interval : 1

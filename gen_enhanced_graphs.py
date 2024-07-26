@@ -10,13 +10,14 @@ import re
 import argparse
 
 dataset = 'AmazonBook'
-# api_key = "sk-fVMV1dDzIHIwnVGK46986c6237094a03A638CfAe56D35561"
-# api_base = "https://bjqai.com/v1"
-base_url = 'https://chat.zhucn.org/v1/'
-api_key = 'sk-DvBuU0tMOS04pyw742167fFa029544E48d3626EaDc159a5b'
-client = OpenAI(api_key=api_key, base_url=api_key)
+api_key = "sk-fVMV1dDzIHIwnVGK46986c6237094a03A638CfAe56D35561"
+api_base = "https://bjqai.com/v1"
+# api_base = 'https://chat.zhucn.org/v1'
+# api_key = 'sk-DvBuU0tMOS04pyw742167fFa029544E48d3626EaDc159a5b'
+client = OpenAI(api_key=api_key, base_url=api_base)
 
 def get_json_answer(system_query, user_query, model_name='gpt-3.5-turbo'):
+    print('Asking...')
     completion = client.chat.completions.create(
                 model=model_name,
                 messages=[
@@ -54,7 +55,6 @@ def json_format_mining(generated_text):
         return True, json_string
     except:
         return False, ""
-
 
 def main(total_epoch, start_step, end_step, enhanced_graph_path: dict, ent2id, rel2id):
     """
@@ -111,6 +111,7 @@ def main(total_epoch, start_step, end_step, enhanced_graph_path: dict, ent2id, r
                 if len(graph) >= 50:
                     try:
                         text_response = get_json_answer(system_query, query, 'gpt-3.5-turbo')
+                        print(text_response)
                         json_match = re.search(r"{.*}", text_response, re.DOTALL)
                         json_data = json_match.group()
                         json_data = json_data.replace("'", '"').replace("\n", "")# Replace the escaped single quotes with double quotes

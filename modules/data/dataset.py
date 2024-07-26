@@ -8,7 +8,9 @@ import random
 import pickle
 import os
 import json
-from collections import (defaultdict, Iterable, OrderedDict)
+from torch.utils.data import DataLoader
+
+from collections import defaultdict
 from tqdm import tqdm
 from ..utils import sp_mat_to_sp_tensor
 from ..model import Sampler
@@ -50,7 +52,7 @@ class KGDataset(torch.utils.data.Dataset):
         heads = list(kg_dict.keys())
         return kg_dict, heads
 
-    def get_kg_dict(self, device):
+    def get_kg_dict(self):
         i2es = dict()
         i2rs = dict()
         for item in range(self.num_users, self.num_users + self.num_items):
@@ -543,3 +545,43 @@ class NegativeSampler(Sampler):
         mask = np.in1d(tmp, self.t_of_hr[(h_index, r_index)], assume_unique=True, invert=True)
         neg = tmp[mask]
         return neg
+    
+class ReshufflingLoader:
+    def __init__(self, data_length, batch_size, shuffle=True, num_workers=0, drop_last=False):
+        self.data_length = data_length
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.num_workers = num_workers
+        self.drop_last = drop_last
+        self.dataloader = self._create_dataloader()
+        self.dataloader_iter = iter(self.dataloader)
+
+    def _create_dataloader(self):
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __init__(self, length):
+                self.length = length
+
+            def __len__(self):
+                return self.length
+
+            def __getitem__(self, idx):
+                return idx
+
+        dataset = SimpleDataset(self.data_length)
+        return DataLoader(dataset, batch_size=self.batch_size, shuffle=self.shuffle,
+                          num_workers=self.num_workers, drop_last=self.drop_last)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            batch = next(self.dataloader_iter)
+        except StopIteration:
+            self.dataloader = self._create_dataloader()
+            self.dataloader_iter = iter(self.dataloader)
+            batch = next(self.dataloader_iter)
+        return batch
+
+    def __len__(self):
+        return len(self.dataloader)
