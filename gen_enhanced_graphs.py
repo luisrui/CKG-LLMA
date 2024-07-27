@@ -4,32 +4,59 @@ from modules.data import *
 
 # from vllm import LLM, SamplingParams
 from openai import OpenAI
+import requests
 import os
 import pickle
 import re
 import argparse
 
-dataset = 'AmazonBook'
-api_key = "sk-fVMV1dDzIHIwnVGK46986c6237094a03A638CfAe56D35561"
-api_base = "https://bjqai.com/v1"
+dataset = 'MovieLens1M'
+# api_key = "sk-fVMV1dDzIHIwnVGK46986c6237094a03A638CfAe56D35561"
+# api_base = "https://bjqai.com/v1"
 # api_base = 'https://chat.zhucn.org/v1'
 # api_key = 'sk-DvBuU0tMOS04pyw742167fFa029544E48d3626EaDc159a5b'
-client = OpenAI(api_key=api_key, base_url=api_base)
+api_key = "8df7b6a81e8e47b4b29c2aa8b870bc6e0eae33855b0c4b5c990ea5d9aa05bdd3"  # 请替换为你的API密钥
+api_base = "https://gpt-api.hkust-gz.edu.cn/v1/chat/completions"
+
+headers = { 
+    "Content-Type": "application/json", 
+    "Authorization": f"Bearer {api_key}"
+}
+
+#client = OpenAI(api_key=api_key, base_url=api_base)
 
 def get_json_answer(system_query, user_query, model_name='gpt-3.5-turbo'):
     print('Asking...')
-    completion = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_query},
-                    {"role": "user", "content": user_query},
-                ],
-                temperature=0.2,
-                top_p=0.1,
-            )
-    text_response = completion.choices[0].message.content
-    text_response = text_response.replace("\n", "").replace("  ", "")
-    return text_response
+    # completion = client.chat.completions.create(
+    #             model=model_name,
+    #             messages=[
+    #                 {"role": "system", "content": system_query},
+    #                 {"role": "user", "content": user_query},
+    #             ],
+    #             temperature=0.2,
+    #             top_p=0.1,
+    #         )
+    # text_response = completion.choices[0].message.content
+    # text_response = text_response.replace("\n", "").replace("  ", "")
+    # return text_response
+    data = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_query},
+            {"role": "user", "content": user_query}
+        ],
+        "temperature": 0.2,
+        "top_p": 0.1
+    }
+    response = requests.post(api_base, headers=headers, data=json.dumps(data))
+    if response.status_code == 200:
+        text_response = response.json()['choices'][0]['message']['content']
+        text_response = text_response.replace("\n", "").replace("  ", "")
+        return text_response
+    else:
+        print(f"Error: {response.status_code}")
+        print(response.json())
+        return None
 
 def json_format_mining(generated_text):
     try:
@@ -54,7 +81,23 @@ def json_format_mining(generated_text):
         json_string += "}"
         return True, json_string
     except:
+        print(f"Error in json_format_mining: {str(e)}")
         return False, ""
+
+def Triple_check(selected_triples, processed_modify_json):
+    """
+    Check if the triples are correct.
+    """
+    add_list = processed_modify_json['add']
+    new_add_list = [], []
+    for triple in add_list:
+        if triple not in selected_triples:
+            new_add_list.append(triple)
+    return {
+
+        'add': new_add_list
+    }
+
 
 def main(total_epoch, start_step, end_step, enhanced_graph_path: dict, ent2id, rel2id):
     """
