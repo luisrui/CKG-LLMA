@@ -30,7 +30,7 @@ def Train(
     device = args['device']
     best_result = dict({'recall@10' : 0.})
 
-    Infoloader = ReshufflingLoader(len(LLM_rectify_data), batch_size=args['Recinfo_batch_size'], shuffle=True, num_workers=12, drop_last=True)
+    #Infoloader = ReshufflingLoader(len(LLM_rectify_data), batch_size=args['Recinfo_batch_size'], shuffle=True, num_workers=12, drop_last=True)
     for epoch in tqdm(range(args['start_epoch'], args['epoch']), disable=False):
         # KGE learning
         if epoch%args['train_interval_kge'] == 0 and args['train_kge']:
@@ -41,8 +41,8 @@ def Train(
             kge_loss = 0. 
 
         # SSL learning(Contrstive + BPR)
-        rectify_info = LLM_rectify_data.generate_batch(next(Infoloader))
-        #rectify_info = None
+        #rectify_info = LLM_rectify_data.generate_batch(next(Infoloader))
+        rectify_info = LLM_rectify_data.generate_batch(batch_size=args['Recinfo_batch_size'])
         contrast_views = contrast_model.get_views(rectify_info=rectify_info)
         # joint learning part
         print("[Joint Learning]")

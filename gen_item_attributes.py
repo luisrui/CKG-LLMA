@@ -114,25 +114,21 @@ def Translate_modify2id(modify_json, ent2id, rel2id, name2id):
         for triple in add_list:
             try:
                 head, rel, tail = triple
-                add_list_id.append((ent2id[head], rel2id[rel], ent2id[tail]))
+                add_list_id.append((ent2id[name2id[head]], rel2id[rel], ent2id[tail]))
             except:
-                add_list_id.append(triple)
+                continue
     
-    return {
-        'add': add_list_id
-    }
+    return add_list_id
 
-def Triple_check(selected_triples, processed_modify_json):
+def Triple_check(selected_triples, check_list):
     """
     Check if the triples are correct.
     """
-    add_list = processed_modify_json['add']
     new_add_list = []
-    for triple in add_list:
+    for triple in check_list:
         if triple not in selected_triples:
             new_add_list.append(triple)
     return {
-
         'add': new_add_list
     }
 
@@ -157,7 +153,7 @@ def main(dataset, item_id, attributes, must_attributes, ent2id, rel2id, i_a_trip
     name2id = {v: k for k, v in id2name.items()}
     print('start generating')
     for items in tqdm(itemloader):
-        random_idxs = np.random.choice(range(len(attributes)), size=25, replace=False)
+        random_idxs = np.random.choice(range(len(attributes)), size=15, replace=False)
         select_attributes = must_attributes
         select_attributes.extend([attributes[idx] for idx in random_idxs])
         select_attributes = str(select_attributes).replace(', ', ',')
@@ -173,8 +169,8 @@ def main(dataset, item_id, attributes, must_attributes, ent2id, rel2id, i_a_trip
                 modify_dict = json.loads(text_response)
             except:
                 modify_dict = ast.literal_eval(text_response)
-            id_json = Translate_modify2id(modify_dict, ent2id, rel2id, name2id)
-            id_json = Triple_check(selected_triples, modify_dict)
+            add_triples_nocheck = Translate_modify2id(modify_dict, ent2id, rel2id, name2id)
+            id_json = Triple_check(selected_triples, add_triples_nocheck)
             print(id_json)
         except Exception as e:
             print(f"tried again, problem {str(e)}!")
@@ -188,8 +184,8 @@ def main(dataset, item_id, attributes, must_attributes, ent2id, rel2id, i_a_trip
                     modify_json = json.loads(text_response)
                 except:
                     modify_json = ast.literal_eval(text_response)
-                id_json = Translate_modify2id(modify_json, ent2id, rel2id, name2id)
-                id_json = Triple_check(selected_triples, id_json)
+                add_triples_nocheck = Translate_modify2id(modify_json, ent2id, rel2id, name2id)
+                id_json = Triple_check(selected_triples, add_triples_nocheck)
                 print(id_json)
             except Exception as e_again:
                 print(f'failed! problem {str(e)}')

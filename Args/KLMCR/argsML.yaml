@@ -2,6 +2,7 @@ cuda: 6
 data:
       path: './dataset'
       name: 'MovieLens1M'
+      LLM_info : 'LLM'
 ### Training Ablation
 Train : True
 wandb : True
@@ -38,7 +39,8 @@ ui_p_drop : 0.001
 #### Constrastive Learning
 LLM_info_path : '/data/cairui/KG-LLM-REC/saved_graphs/LLM_generated_info/'
 LLM_file: 'MovieLens1M_10_2_e0_enhanced_1600.pkl'
-Recinfo_batch_size: 128
+add_triple_ratio : 0.1
+Recinfo_batch_size: 1000
 confidence_random_drop : 0.3
 mix_ratio : 0.5
 con_temperature : 0.2

@@ -84,25 +84,25 @@ class Contrast(nn.Module):
     def get_kg_views(self, rectify_info : dict):
         h2t = self.model.kg_dict
         h2r = self.model.item2relations
-        # view1, rel_v1 = self.drop_edge_random(
-        #     h2t, h2r, self.kg_p_drop, self.model.num_entities)
-        # view2, rel_v2 = self.drop_edge_random(
-        #     h2t, h2r, self.kg_p_drop, self.model.num_entities)
-        # return view1, rel_v1, view2, rel_v2
-        # view_ii, rel_ii = self.drop_LLM_rectify(
-        #     h2t, h2r, rectify_info, 'ii', self.model.num_entities, self.model.num_relations)
-        # view_ui, rel_ui = self.drop_LLM_rectify(
-        #     h2t, h2r, rectify_info, 'ui', self.model.num_entities, self.model.num_relations)
-        view1, rel_v1 = self.drop_edge_random_rectify(
-            h2t, h2r, rectify_info, 'ii', self.kg_p_drop, self.model.num_entities, self.model.num_relations)
-        view2, rel_v2 = self.drop_edge_random_rectify(
-            h2t, h2r, rectify_info, 'ui', self.kg_p_drop, self.model.num_entities, self.model.num_relations)
+        view1, rel_v1 = self.drop_edge_random(
+            h2t, h2r, self.kg_p_drop, self.model.num_entities)
+        view2, rel_v2 = self.drop_edge_random(
+            h2t, h2r, self.kg_p_drop, self.model.num_entities)
+        #return view1, rel_v1, view2, rel_v2
+        view_ii, rel_ii = self.drop_LLM_rectify(
+            h2t, h2r, rectify_info, 'ii', self.model.num_entities, self.model.num_relations)
+        view_ui, rel_ui = self.drop_LLM_rectify(
+            h2t, h2r, rectify_info, 'ui', self.model.num_entities, self.model.num_relations)
+        # view1, rel_v1 = self.drop_edge_random_rectify(
+        #     h2t, h2r, rectify_info, 'ii', self.kg_p_drop, self.model.num_entities, self.model.num_relations)
+        # view2, rel_v2 = self.drop_edge_random_rectify(
+        #     h2t, h2r, rectify_info, 'ui', self.kg_p_drop, self.model.num_entities, self.model.num_relations)
 
         collect_info = {
-            # 'view_ii': view_ii,
-            # 'rel_ii': rel_ii,
-            # 'view_ui': view_ui,
-            # 'rel_ui': rel_ui,
+            'view_ii': view_ii,
+            'rel_ii': rel_ii,
+            'view_ui': view_ui,
+            'rel_ui': rel_ui,
             'view1' : view1,
             'relv1' : rel_v1,
             'view2' : view2,
@@ -223,7 +223,7 @@ class Contrast(nn.Module):
         else:
             #kgv1, relv1, kgv2, relv2 = self.get_kg_views(rectify_info)
             collect_info = self.get_kg_views(rectify_info)
-            #v_ii, rel_ii, v_ui, rel_ui = collect_info['view_ii'], collect_info['rel_ii'], collect_info['view_ui'], collect_info['rel_ui']
+            v_ii, rel_ii, v_ui, rel_ui = collect_info['view_ii'], collect_info['rel_ii'], collect_info['view_ui'], collect_info['rel_ui']
             kgvii, relvii, kgvui, relvui = collect_info['view1'], collect_info['relv1'], collect_info['view2'], collect_info['relv2']
 
         if aug_side == "kg":

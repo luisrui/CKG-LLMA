@@ -25,7 +25,8 @@ if __name__ == "__main__":
     args.update({'device': device, 'ent2id' : rec_data.ent2id,'rel2id' : rec_data.rel2id,})
 
     kg_train_data = KGDataset(args)
-    LLM_rectify_data = LLMRectifyDataset(args)
+    #LLM_rectify_data = LLMRectifyDataset(args)
+    LLM_rectify_data = LLMPoolDataset(args)
 
     Rec_data_loader = torch.utils.data.DataLoader(
         rec_data,

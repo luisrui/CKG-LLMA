@@ -384,20 +384,64 @@ class RecTrainDataset(torch.utils.data.Dataset):
         edge_type = torch.tensor([self.rel2id['liked']] * len(edge_index[0]), dtype=torch.long)
         return edge_index, edge_type
 
+class LLMPoolDataset(torch.utils.data.Dataset):
+    '''
+    '''
+    def __init__(self, args):
+        print('Loading LLM Enhanced Information...')
+        self._LLM_info_dir = os.path.join(args['data']['path'], args['data']['name'], args['data']['LLM_info'])
+        self.ii_del = pd.read_csv(os.path.join(self._LLM_info_dir, 'ii_del.csv'))
+        self.ii_add = pd.read_csv(os.path.join(self._LLM_info_dir, 'ii_add.csv'))
+        self.ui_del = pd.read_csv(os.path.join(self._LLM_info_dir, 'ui_del.csv'))
+        self.ui_add = pd.read_csv(os.path.join(self._LLM_info_dir, 'ui_add.csv'))
+        self.add_triple_ratio = args['add_triple_ratio']
+
+    def __len__(self):
+        return min(len(self.ii_del), len(self.ii_add), len(self.ui_del), len(self.ui_add))
+    
+    def __getitem__(self, idx):
+        return self.ii_del.iloc[idx], self.ii_del.iloc[idx], self.ii_del.iloc[idx], self.ii_del.iloc[idx]
+    
+    def generate_batch(self, batch_size):
+        random_idx = np.random.choice(len(self.ii_del), int(batch_size * self.add_triple_ratio), replace=False)
+        ii_add = [tuple(self.ii_add.iloc[idx]) for idx in random_idx]
+        random_idx = np.random.choice(len(self.ii_add), int(batch_size * (1 - self.add_triple_ratio)), replace=False)
+        ii_del = [tuple(self.ii_del.iloc[idx]) for idx in random_idx]
+        random_idx = np.random.choice(len(self.ui_add), int(batch_size * self.add_triple_ratio), replace=False)
+        ui_add = [tuple(self.ui_add.iloc[idx]) for idx in random_idx]
+        random_idx = np.random.choice(len(self.ui_del), int(batch_size * (1 - self.add_triple_ratio)), replace=False)
+        ui_del = [tuple(self.ui_del.iloc[idx]) for idx in random_idx]
+        return {
+            'ii_add': ii_add,
+            'ii_del': ii_del,
+            'ui_add': ui_add,
+            'ui_del': ui_del
+        }
+
+    
 class LLMRectifyDataset(torch.utils.data.Dataset):
     '''
     '''
     def __init__(self, args):
         print('Loading LLM Enhanced Information...')
         self._LLM_info_dir = args['LLM_info_path']
-        self._LLM_file = args['LLM_file']
-        # with open(os.path.join(self._LLM_info_dir, self._LLM_ui_file), 'rb') as f:
-        #     self.LLM_info_ui = pickle.load(f)
-        with open(os.path.join(self._LLM_info_dir, self._LLM_file), 'rb') as f:
-            self.LLM_info = pickle.load(f)
+        self.ii_del = pd.read_csv(os.path.join(self._LLM_info_dir, 'ii_del.csv'))
+        self.ii_add = pd.read_csv(os.path.join(self._LLM_info_dir, 'ii_add.csv'))
+        self.ui_del = pd.read_csv(os.path.join(self._LLM_info_dir, 'ui_del.csv'))
+        self.ui_add = pd.read_csv(os.path.join(self._LLM_info_dir, 'ui_add.csv'))
+        self.LLM_info = {
+            'ii': {
+                'add': self.ii_add,
+                'delete': self.ii_del
+            },
+            'ui': {
+                'add': self.ui_add,
+                'delete': self.ui_del
+            }
+        }
 
     def __len__(self):
-        return len(self.LLM_info['ii'])
+        return len(self.LLM_info['ii']['add'])
     
     def __getitem__(self, idx):
         edit_ii = self.LLM_info['ii'][idx]
