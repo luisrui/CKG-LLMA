@@ -43,7 +43,15 @@ def Translate_triple2text(triples, id2ent, id2rel, id2name):
     triples_text = triples_text.replace(', ', ',')
     return triples_text
 
-def Read_prompt(dataset:str, initial_query : str, items, id2ent : dict, id2rel : dict, id2name: dict, selected_triples : list, target_relations, attributes):
+def Read_prompt(dataset:str, 
+                initial_query : str, 
+                items, 
+                id2ent : dict, 
+                id2rel : dict, 
+                id2name: dict, 
+                selected_triples : list, 
+                target_relations, 
+                attributes):
     '''
     Generate graph prompts based on kg triples and logics.
     '''

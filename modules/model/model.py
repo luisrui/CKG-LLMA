@@ -30,7 +30,7 @@ class KLMCR(BasicModel):
         #self.KGEloss = MarginLoss(margin=3.0)
         self.kgcn = args['kgcn']
         self.gat = GAT(self.latent_dim, self.latent_dim,
-                       dropout=0.4, alpha=0.2).train()
+                       self.num_relations + 1, dropout=0.4, alpha=0.2).train()
     
     def __init_weight(self, rec_data, kg_data):
         self.num_users = self.args['num_users']
@@ -73,6 +73,7 @@ class KLMCR(BasicModel):
         for item in self.i2r_cal:
             self.i2r_cal[item] = torch.IntTensor(self.i2r_cal[item]).to(self.device)
             self.i2t_cal[item] = torch.IntTensor(self.i2t_cal[item]).to(self.device)
+        #self.W_Q = nn.Parameter(torch.Tensor(self.latent_dim, self.latent_dim))
         #self.kg_dict = kg_data.kg_dict
 
     def calc_kg_loss_transE(self, h, r, pos_t, neg_t):
@@ -193,9 +194,29 @@ class KLMCR(BasicModel):
             return self.cal_item_embedding_rgat(head2tail, head2rel)
         elif (self.kgcn == "MEAN"):
             return self.cal_item_embedding_mean(head2tail)
+        elif (self.kgcn == "Ours"):
+            return self.cal_item_embedding_KLMCR(head2tail, head2rel)
         elif (self.kgcn == "NO"):
             return self.embedding_entity.weight[self.num_users:self.num_users+self.num_items]
-        
+
+    def cal_item_embedding_KLMCR(self, kg: dict, head2rel:dict = None):
+        if head2rel is None:
+            head2rel = self.i2r_cal
+        item_embs = self.embedding_entity(torch.IntTensor(
+            list(kg.keys())).to(self.device))  # item_num, emb_dim
+        # item_num, entity_num_each
+        item_entities = torch.stack(list(kg.values()))
+        item_relations = torch.stack(list(head2rel.values()))
+        # item_num, entity_num_each, emb_dim
+        entity_embs = self.embedding_entity(item_entities)
+        relation_embs = self.embedding_relation(
+            item_relations)  # item_num, entity_num_each, emb_dim
+        # w_r = self.W_R[relation_embs] # item_num, entity_num_each, emb_dim, emb_dim
+        # item_num, entity_num_each
+        padding_mask = torch.where(item_entities != self.num_entities, torch.ones_like(
+            item_entities), torch.zeros_like(item_entities)).float()
+        return self.gat.forward_relation_specific(item_embs, entity_embs, relation_embs, item_relations, padding_mask)
+     
     def cal_item_embedding_rgat(self, kg: dict, head2rel:dict = None):
         if head2rel is None:
             head2rel = self.i2r_cal

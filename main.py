@@ -26,7 +26,10 @@ if __name__ == "__main__":
 
     kg_train_data = KGDataset(args)
     #LLM_rectify_data = LLMRectifyDataset(args)
-    LLM_rectify_data = LLMPoolDataset(args)
+    if args['ContrastiveSeperate'] or args['ContrastiveFused']:
+        LLM_rectify_data = LLMPoolDataset(args)
+    else:
+        LLM_rectify_data = None
 
     Rec_data_loader = torch.utils.data.DataLoader(
         rec_data,

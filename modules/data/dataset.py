@@ -403,22 +403,24 @@ class LLMPoolDataset(torch.utils.data.Dataset):
         return self.ii_del.iloc[idx], self.ii_del.iloc[idx], self.ii_del.iloc[idx], self.ii_del.iloc[idx]
     
     def generate_batch(self, batch_size):
-        random_idx = np.random.choice(len(self.ii_del), int(batch_size * self.add_triple_ratio), replace=False)
+        random_idx = np.random.choice(len(self.ii_add), int(batch_size * self.add_triple_ratio), replace=False)
         ii_add = [tuple(self.ii_add.iloc[idx]) for idx in random_idx]
-        random_idx = np.random.choice(len(self.ii_add), int(batch_size * (1 - self.add_triple_ratio)), replace=False)
+        random_idx = np.random.choice(len(self.ii_del), int(batch_size), replace=False)
         ii_del = [tuple(self.ii_del.iloc[idx]) for idx in random_idx]
         random_idx = np.random.choice(len(self.ui_add), int(batch_size * self.add_triple_ratio), replace=False)
         ui_add = [tuple(self.ui_add.iloc[idx]) for idx in random_idx]
-        random_idx = np.random.choice(len(self.ui_del), int(batch_size * (1 - self.add_triple_ratio)), replace=False)
+        random_idx = np.random.choice(len(self.ui_del), int(batch_size), replace=False)
         ui_del = [tuple(self.ui_del.iloc[idx]) for idx in random_idx]
+        del_cands = [item[2] for item in ui_del if item[1] == 0]
+        #print(del_cands)
         return {
             'ii_add': ii_add,
             'ii_del': ii_del,
             'ui_add': ui_add,
-            'ui_del': ui_del
+            'ui_del': ui_del,
+            'del_cands' : list(set(del_cands))
         }
-
-    
+  
 class LLMRectifyDataset(torch.utils.data.Dataset):
     '''
     '''
@@ -465,7 +467,7 @@ class LLMRectifyDataset(torch.utils.data.Dataset):
             'ii_add': ii_add,
             'ii_del': ii_del,
             'ui_add': ui_add,
-            'ui_del': ui_del
+            'ui_del': ui_del,
         }
     
 class PairwiseSampler(Sampler):

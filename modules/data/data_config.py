@@ -1,10 +1,10 @@
 data_config = {
     'AmazonBook' : {
-        'user' : 'User_id',
-        'item' : 'Id',
+        'user' : 'User',
+        'item' : 'Item',
         'review' : 'review/text',
         'num_users' : 13373,
-        'num_items' : 46204, 
+        'num_items' : 37837, 
     },
     'Steam' : {
         'user' : 'user',
@@ -13,7 +13,7 @@ data_config = {
         'num_users' : 53533,
         'num_items' : 13232,
     },
-    'MovieLens1M' : {
+    'MovieLens100K' : {
         'user' : 'User',
         'item' : 'Item', 
         'review' : 'Review',

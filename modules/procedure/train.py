@@ -42,15 +42,15 @@ def Train(
 
         # SSL learning(Contrstive + BPR)
         #rectify_info = LLM_rectify_data.generate_batch(next(Infoloader))
-        rectify_info = LLM_rectify_data.generate_batch(batch_size=args['Recinfo_batch_size'])
+        if LLM_rectify_data:
+            rectify_info = LLM_rectify_data.generate_batch(batch_size=args['Recinfo_batch_size'])
+        else:
+            rectify_info = None
         contrast_views = contrast_model.get_views(rectify_info=rectify_info)
         # joint learning part
         print("[Joint Learning]")
-        # (total_loss, bpr_loss, con_loss, adj_loss) = \
-        #     BPR_train_contrast(args, rec_data, model, contrast_model, contrast_views, optimizer, epoch+1)
-        (total_loss, bpr_loss, con_loss) = \
+        (total_loss, bpr_loss, con_loss, adj_loss) = \
             BPR_train_contrast(args, rec_data, model, contrast_model, contrast_views, optimizer, epoch+1)
-
 
         if (epoch + 1) % args['eval_interval'] == 0:
             print("[Valid]")
@@ -72,7 +72,7 @@ def Train(
                     'BPR loss' : bpr_loss,
                     'CON loss' : con_loss,
                     'KGE loss' : kge_loss,
-                    # 'ADJ_loss' : adj_loss
+                    'ADJ_loss' : adj_loss
                 })
 
             if results_test["recall@10"] > best_result["recall@10"]:

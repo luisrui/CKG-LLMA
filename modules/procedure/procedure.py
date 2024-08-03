@@ -43,11 +43,12 @@ def BPR_train_contrast(
     adj_loss = 0.
     # For SGL
     uiv1, uiv2 = contrast_views["uiv1"], contrast_views["uiv2"]
-    # kgv1, kgv2 = contrast_views["kgv1"], contrast_views["kgv2"]
-    # relv1, relv2 = contrast_views["relv1"], contrast_views["relv2"]
-    # uiv3, uiv4 = contrast_views["uiv3"], contrast_views["uiv4"]
-    kgvii, kgvui = contrast_views["v_ii"], contrast_views["v_ii"]
-    relvii, relvui = contrast_views["rel_ii"], contrast_views["rel_ui"]
+    kgv1, kgv2 = contrast_views["v_1"], contrast_views["v_2"]
+    relv1, relv2 = contrast_views["relv1"], contrast_views["relv2"]
+    if args['ContrastiveSeperate']:
+        uiv3, uiv4 = contrast_views["uiv3"], contrast_views["uiv4"]
+        kgvii, kgvui = contrast_views["v_ii"], contrast_views["v_ii"]
+        relvii, relvui = contrast_views["rel_ii"], contrast_views["rel_ui"]
 
     def SGL_constrastive(users, items, usersv1_ro, itemsv1_ro, usersv2_ro, itemsv2_ro):
         items_uiv1 = itemsv1_ro[items - rec_data.num_users]
@@ -76,40 +77,33 @@ def BPR_train_contrast(
         users = batch_users
         items = batch_pos  # [B*1]
 
-        usersv1_ro, itemsv1_ro = Recmodel.view_computer_all(uiv1, kgvii, relvii) 
-        usersv2_ro, itemsv2_ro = Recmodel.view_computer_all(uiv2, kgvui, relvui)
-        # usersv3_ro, itemsv3_ro = Recmodel.view_computer_all(uiv3, kgv3, relv3)
-        # usersv4_ro, itemsv4_ro = Recmodel.view_computer_all(uiv4, kgv4, relv4)
-
+        usersv1_ro, itemsv1_ro = Recmodel.view_computer_all(uiv1, kgv1, relv1) 
+        usersv2_ro, itemsv2_ro = Recmodel.view_computer_all(uiv2, kgv2, relv2)
         l_user, l_item = SGL_constrastive(users, items, usersv1_ro, itemsv1_ro, usersv2_ro, itemsv2_ro)
-        #l_user_adjust, l_item_adjust = SGL_constrastive(users, items, usersv3_ro, itemsv3_ro, usersv4_ro, itemsv4_ro)
-        # l_user = contrast_model.grace_loss(users_uiv1, users_uiv2)
-        # L = l_bpr_reg + L_user + L_item + L_kg + R^2
         l_ssl.extend([l_user*args['loss_con_weight'], l_item*args['loss_con_weight']])
-        #l_ssl_adj.extend([l_user_adjust*args['loss_con_weight']*(1/epoch), l_item_adjust*args['loss_con_weight']*(1/epoch)])
-
-        if l_ssl:
-            l_ssl = torch.stack(l_ssl).sum()
-            #l_ssl_adj = torch.stack(l_ssl_adj).sum()
-            l_all = l_bpr_reg+l_ssl
-            #l_all = l_bpr_reg+l_ssl+l_ssl_adj
-            con_loss += l_ssl.cpu().item()
-            #adj_loss += l_ssl_adj.cpu().item()
+        l_ssl = torch.stack(l_ssl).sum()
+        if args['ContrastiveSeperate']:
+            usersv3_ro, itemsv3_ro = Recmodel.view_computer_all(uiv3, kgvii, relvii)
+            usersv4_ro, itemsv4_ro = Recmodel.view_computer_all(uiv4, kgvui, relvui)
+            l_user_adjust, l_item_adjust = SGL_constrastive(users, items, usersv3_ro, itemsv3_ro, usersv4_ro, itemsv4_ro)
+            l_ssl_adj.extend([l_user_adjust*args['loss_con_weight']/epoch, l_item_adjust*args['loss_con_weight']/epoch])
+            l_ssl_adj = torch.stack(l_ssl_adj).sum()
+            l_all = l_bpr_reg+l_ssl+l_ssl_adj
+            adj_loss += l_ssl_adj.cpu().item()
         else:
-            l_all = l_bpr_reg
+            l_all = l_bpr_reg+l_ssl
 
         optimizer.zero_grad()
         l_all.backward()
         optimizer.step()
 
+        con_loss += l_ssl.cpu().item()
         bpr_loss += l_bpr_reg.cpu().item()
         total_loss += l_all.cpu().item()
-        # if world.tensorboard:
-        #     w.add_scalar(f'BPRLoss/BPR', l_all, epoch *
-        #                  int(len(users) / batch_size) + batch_i)
+
     total_loss = total_loss / (total_batch*batch_size)
     bpr_loss = bpr_loss / (total_batch*batch_size)
     con_loss = con_loss / (total_batch*batch_size)
-    #adj_loss = adj_loss / (total_batch*batch_size)
-    return total_loss, bpr_loss, con_loss
-    #return total_loss, bpr_loss, con_loss, adj_loss
+    adj_loss = adj_loss / (total_batch*batch_size)
+    #return total_loss, bpr_loss, con_loss
+    return total_loss, bpr_loss, con_loss, adj_loss

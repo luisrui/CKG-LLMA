@@ -5,7 +5,10 @@ from random import random, sample
 from ..model import KLMCR
 import torch
 import torch.nn as nn
-from torch_geometric.utils import degree, to_undirected
+import math
+#from torch_geometric.utils import degree, to_undirected
+from torch_scatter import scatter_mean, scatter_sum
+from torch_geometric.utils import softmax as scatter_softmax
 import scipy.sparse as sp
 import numpy as np
 import torch.nn.functional as F
@@ -40,7 +43,10 @@ class Contrast(nn.Module):
         super(Contrast, self).__init__()
         self.model : KLMCR = model
         self.device = args['device']
-        self.tau = args['kgc_temperatue']
+        self.isSeperated = args['ContrastiveSeperate']
+        self.isFused = args['ContrastiveFused']
+
+        self.tau = args['nce_temperatue']
         self.kg_p_drop = args['kg_p_drop']
         self.ui_p_drop = args['ui_p_drop']
         self.mix_ratio = args['mix_ratio']
@@ -49,8 +55,10 @@ class Contrast(nn.Module):
         self.item_np = rec_data.item_np
         self.user_np = rec_data.user_np
         self.ent2id = args['ent2id']
-        self.confidence_drop = args['confidence_random_drop']
-        
+        self.confi_thres = args['confidence_threshold']
+        self.emb_size = self.model.latent_dim
+        #self.W_Q = nn.Parameter(torch.Tensor(self.n_relations, self.emb_size, self.emb_size))
+
     def projection(self, z: torch.Tensor) -> torch.Tensor:
         z = F.elu(self.fc1(z))
         return self.fc2(z)
@@ -84,34 +92,71 @@ class Contrast(nn.Module):
     def get_kg_views(self, rectify_info : dict):
         h2t = self.model.kg_dict
         h2r = self.model.item2relations
-        view1, rel_v1 = self.drop_edge_random(
-            h2t, h2r, self.kg_p_drop, self.model.num_entities)
-        view2, rel_v2 = self.drop_edge_random(
-            h2t, h2r, self.kg_p_drop, self.model.num_entities)
-        #return view1, rel_v1, view2, rel_v2
-        view_ii, rel_ii = self.drop_LLM_rectify(
-            h2t, h2r, rectify_info, 'ii', self.model.num_entities, self.model.num_relations)
-        view_ui, rel_ui = self.drop_LLM_rectify(
-            h2t, h2r, rectify_info, 'ui', self.model.num_entities, self.model.num_relations)
-        # view1, rel_v1 = self.drop_edge_random_rectify(
-        #     h2t, h2r, rectify_info, 'ii', self.kg_p_drop, self.model.num_entities, self.model.num_relations)
-        # view2, rel_v2 = self.drop_edge_random_rectify(
-        #     h2t, h2r, rectify_info, 'ui', self.kg_p_drop, self.model.num_entities, self.model.num_relations)
+        if self.isSeperated:
+            view1, rel_v1 = self.drop_edge_random(
+                h2t, h2r, self.kg_p_drop, self.model.num_entities)
+            view2, rel_v2 = self.drop_edge_random(
+                h2t, h2r, self.kg_p_drop, self.model.num_entities)
+            #return view1, rel_v1, view2, rel_v2
+            view_ii, rel_ii = self.drop_LLM_rectify(
+                h2t, h2r, rectify_info, 'ii', self.model.num_entities, self.model.num_relations)
+            view_ui, rel_ui = self.drop_LLM_rectify(
+                h2t, h2r, rectify_info, 'ui', self.model.num_entities, self.model.num_relations)
+            return  {
+                'view_ii': view_ii, 'rel_ii': rel_ii,
+                'view_ui': view_ui, 'rel_ui': rel_ui,
+                'view1' : view1, 'relv1' : rel_v1,
+                'view2' : view2, 'relv2' : rel_v2
+            }
+        elif self.isFused:
+            view1, rel_v1 = self.drop_edge_random_rectify(
+                h2t, h2r, rectify_info, 'ii', self.kg_p_drop, self.model.num_entities, self.model.num_relations)
+            view2, rel_v2 = self.drop_edge_random_rectify(
+                h2t, h2r, rectify_info, 'ui', self.kg_p_drop, self.model.num_entities, self.model.num_relations)
+            return {
+                'view1' : view1, 'relv1' : rel_v1,
+                'view2' : view2, 'relv2' : rel_v2
+            }
+        else:
+            view1, rel_v1 = self.drop_edge_random(
+                h2t, h2r, self.kg_p_drop, self.model.num_entities)
+            view2, rel_v2 = self.drop_edge_random(
+                h2t, h2r, self.kg_p_drop, self.model.num_entities)
+            return {
+                'view1' : view1, 'relv1' : rel_v1,
+                'view2' : view2, 'relv2' : rel_v2
+            }
 
-        collect_info = {
-            'view_ii': view_ii,
-            'rel_ii': rel_ii,
-            'view_ui': view_ui,
-            'rel_ui': rel_ui,
-            'view1' : view1,
-            'relv1' : rel_v1,
-            'view2' : view2,
-            'relv2' : rel_v2
-        }
-        #return view_ii, rel_ii, view_ui, rel_ui
-        return collect_info
+    @torch.no_grad()
+    def confidence_drop(self, batch_heads, batch_relations, batch_tails):
+        entity_emb = self.model.embedding_entity
+        relation_emb = self.model.embedding_relation
+        emb_size = self.model.latent_dim
+        W_h = self.model.gat.layer.W_h # num_rels, e_embs, e_embs
+        W_e = self.model.gat.layer.W_e # num_rels, e_embs, e_embs
+        w_Qh  = W_h[batch_relations] # batch_size, e_embs, e_embs
+        w_Qe  = W_e[batch_relations] # batch_size, e_embs, e_embs
+        
+        query = torch.bmm(entity_emb(batch_heads).unsqueeze(1), w_Qh).squeeze(1)
+        key = torch.bmm(entity_emb(batch_tails).unsqueeze(1), w_Qe).squeeze(1)
+        value = relation_emb(batch_relations)
 
-    def get_ui_views_weighted(self, item_stabilities):
+        edge_attn = (query * (key * value)).sum(dim=-1) / math.sqrt(emb_size)
+        edge_attn_logits = edge_attn.mean(-1).detach()
+        # softmax by head_node
+        edge_attn_score = scatter_softmax(edge_attn_logits, batch_heads)
+        # normalization by head_node degree
+        norm = scatter_sum(torch.ones_like(batch_heads), batch_heads, dim=0, dim_size=entity_emb.weight.shape[0])
+        norm = torch.index_select(norm, 0, batch_heads)
+        edge_attn_score = edge_attn_score * norm
+        # # print attn score
+        # if print:
+        #     self.logger.info("edge_attn_score std: {}".format(edge_attn_score.std()))
+        # if return_logits:
+        #     return edge_attn_score, edge_attn_logits
+        return edge_attn_score
+
+    def get_ui_views_weighted(self, item_stabilities, del_cands = None):
         # graph = self.model.Graph
         # n_users = self.num_users
 
@@ -140,7 +185,7 @@ class Contrast(nn.Module):
         item_mask = torch.bernoulli(weights).to(torch.bool)
         #print(f"keep ratio: {item_mask.sum()/item_mask.size()[0]:.2f}")
         # drop
-        g_weighted = self.ui_drop_weighted(item_mask)
+        g_weighted = self.ui_drop_weighted(item_mask, del_cands)
         g_weighted.requires_grad = False
         return g_weighted
 
@@ -150,7 +195,7 @@ class Contrast(nn.Module):
         sim = self.sim(kgv1_ro, kgv2_ro)
         return sim
     
-    def ui_drop_weighted(self, item_mask):
+    def ui_drop_weighted(self, item_mask, del_cands = None):
         # item_mask: [item_num]
         item_mask = item_mask.tolist()
         n_nodes = self.num_users + self.num_items
@@ -159,8 +204,13 @@ class Contrast(nn.Module):
         keep_idx = list()
             # overall sample rate = 0.4*0.9 = 0.36
         for i, j in enumerate(item_np.tolist()):
+            if del_cands and j not in del_cands:
+                continue
             if item_mask[j - self.num_users] and random() > 0.6:
                 keep_idx.append(i)
+        # for i, j in enumerate(item_np.tolist()):
+        #     if item_mask[j - self.num_users] and random() > 0.6:
+        #         keep_idx.append(i)
         # add random samples
         interaction_random_sample = sample(
             list(range(len(item_np))), int(len(item_np)*self.mix_ratio))
@@ -215,42 +265,38 @@ class Contrast(nn.Module):
         g.requires_grad = False
         return g
 
-    def get_views(self, rectify_info, aug_side="both"):
+    def get_views(self, rectify_info):
         # drop (epoch based)
         # kg drop -> 2 views -> view similarity for item
-        if aug_side == "ui":
-            kgv1, kgv2 = None, None
-        else:
-            #kgv1, relv1, kgv2, relv2 = self.get_kg_views(rectify_info)
-            collect_info = self.get_kg_views(rectify_info)
+        collect_info = self.get_kg_views(rectify_info)
+        if self.isSeperated:
             v_ii, rel_ii, v_ui, rel_ui = collect_info['view_ii'], collect_info['rel_ii'], collect_info['view_ui'], collect_info['rel_ui']
-            kgvii, relvii, kgvui, relvui = collect_info['view1'], collect_info['relv1'], collect_info['view2'], collect_info['relv2']
+            v_1, r_1, v_2, r_2 = collect_info['view1'], collect_info['relv1'], collect_info['view2'], collect_info['relv2']
+        else: 
+            v_1, r_1, v_2, r_2 = collect_info['view1'], collect_info['relv1'], collect_info['view2'], collect_info['relv2']
 
-        if aug_side == "kg":
-            uiv1, uiv2 = None, None
-        else:
-            stability = self.item_kg_stability(kgvii, relvii, kgvui, relvui).to(self.device)
+        if self.isSeperated:
+            stability = self.item_kg_stability(v_1, r_1, v_2, r_2).to(self.device)
             uiv1 = self.get_ui_views_weighted(stability)
             uiv2 = self.get_ui_views_weighted(stability)
-            # stability_adjusted = self.item_kg_stability(v_ii, rel_ii, v_ui, rel_ui).to(self.device)
-            # uiv3 = self.get_ui_views_weighted(stability_adjusted)
-            # uiv4 = self.get_ui_views_weighted(stability_adjusted)
-            #uiv1, uiv2 = self.transform_origin_graph(self.model.Graph), self.transform_origin_graph(self.model.Graph)
-
-        contrast_views = {
-            "kgvii": kgvii,
-            "kgvui": kgvui,
-            "uiv1": uiv1,
-            "uiv2": uiv2,
-            'relvii': relvui,
-            'relvui': relvii,
-            # 'uiv3': uiv3,
-            # 'uiv4': uiv4,
-            # 'v_ii': v_ii,
-            # 'v_ui': v_ui,
-            # 'rel_ii': rel_ii,
-            # 'rel_ui': rel_ui
-        }
+            stability_adjusted = self.item_kg_stability(v_ii, rel_ii, v_ui, rel_ui).to(self.device)
+            uiv3 = self.get_ui_views_weighted(stability_adjusted)
+            uiv4 = self.get_ui_views_weighted(stability_adjusted, rectify_info['del_cands'])
+        #uiv1, uiv2 = self.transform_origin_graph(self.model.Graph), self.transform_origin_graph(self.model.Graph)
+            contrast_views = {
+                "uiv1": uiv1, 'relv1': r_1, 'v_1' : v_1,
+                "uiv2": uiv2, 'relv2': r_2, 'v_2' : v_2,
+                'uiv3': uiv3, 'rel_ii': rel_ii, 'v_ii': v_ii,
+                'uiv4': uiv4, 'rel_ui': rel_ui, 'v_ui': v_ui,
+            }
+        else:
+            stability = self.item_kg_stability(v_1, r_1, v_2, r_2).to(self.device)
+            uiv1 = self.get_ui_views_weighted(stability)
+            uiv2 = self.get_ui_views_weighted(stability)
+            contrast_views = {
+                "uiv1": uiv1, 'relv1': r_1, 'v_1' : v_1,
+                "uiv2": uiv2, 'relv2': r_2, 'v_2' : v_2,
+            }
         return contrast_views
     
     def drop_edge_random(self, head2tail, head2rel, p_drop, padding):
@@ -268,34 +314,34 @@ class Contrast(nn.Module):
         return res, rel
     
     def drop_LLM_rectify(self, head2tail, head2rel, rectify_info, subgraph:str, padding_e, padding_r):
-        tri2add = rectify_info[f'{subgraph}_add']
-        tri2del = rectify_info[f'{subgraph}_del']
+        tri2add = torch.IntTensor(rectify_info[f'{subgraph}_add'])
+        tri2del = torch.IntTensor(rectify_info[f'{subgraph}_del'])
         res_t, res_r = head2tail.copy(), head2rel.copy()
         ## delete triples based on LLM
-        for triple in tri2del:
-            try:
-                head, _, tail = triple
-                if isinstance(head, int) and isinstance(tail, int):
-                    if head not in res_t or tail not in res_t[head]:
-                        continue
-                    if random() > self.confidence_drop:
-                        idx = res_t[head].index(tail)
-                        res_t[head][idx] = padding_e
-            except:
-                continue
+        combined_triples = torch.cat([tri2add, tri2del], dim=0)
+        num_add = tri2add.shape[0]
+        heads, relations, tails = combined_triples[:, 0].to(self.device), combined_triples[:, 1].to(self.device), combined_triples[:, 2].to(self.device)
+        batch_confi = self.confidence_drop(heads, relations, tails)
+        triple_mask = batch_confi > self.confi_thres
+        filtered_triples = combined_triples[triple_mask]
+        filtered_add = filtered_triples[:num_add]
+        filtered_del = filtered_triples[num_add:]
+        for triple in filtered_del:
+            head, _, tail = triple
+            idx = res_t[head].index(tail)
+            res_t[head][idx] = padding_e
         ## add triples based on LLM
-        for head, rel, tail in tri2add:
-            if isinstance(head, int) and isinstance(tail, int):
-                if head not in res_t or tail <= self.num_users + self.num_items: ## In case it is triples of other kinds, not i-a
-                    continue
-                if random() > self.confidence_drop and padding_e in res_t[head]:
-                    idx = res_t[head].index(padding_e)
-                    res_t[head][idx] = tail
-                    res_r[head][idx] = rel - 1
+        for head, rel, tail in filtered_add:
+            if head not in res_t and tail < self.num_users + self.num_items: ## In case it is triples of other kinds, not i-a
+                continue                    
+            if padding_e in res_t[head]:
+                idx = res_t[head].index(padding_e)
+                res_t[head][idx] = tail
+                res_r[head][idx] = rel 
         for key in res_t:
             res_t[key] = torch.IntTensor(res_t[key]).to(self.device)
             res_r[key] = torch.IntTensor(res_r[key]).to(self.device)
-        return res_t, 
+        return res_t, res_r
 
     def drop_edge_random_rectify(self, head2tail, head2rel, rectify_info, subgraph:str, p_drop, padding_e, padding_r):
         res_e = dict()

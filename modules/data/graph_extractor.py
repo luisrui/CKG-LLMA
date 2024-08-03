@@ -163,7 +163,7 @@ class Extractor():
                 print(f'UI time: {end_time - start_time}')
                 start_time = time.time()            
             elif aug_tupe == 'ii':
-                 # Item -> Item Subgraph
+                # Item -> Item Subgraph
                 # item_neighbors = [[(rel, nbr) for rel, nbr in self.i_of_i[item.item()] if nbr in batch_items] for item in batch_items]
                 # item_neighbors_lens = [len(nbrs) for nbrs in item_neighbors]
                 # max_len = max(item_neighbors_lens)

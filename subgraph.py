@@ -21,12 +21,11 @@ if __name__ == "__main__":
     
     device = "cuda:" + str(args["cuda"]) if int(args["cuda"]) >= 0 else "cpu"
     #device = 'cpu'
-    rec_data = RecTrainDataset(args)
-    args.update({'device': device, 'ent2id' : rec_data.ent2id,'rel2id' : rec_data.rel2id,})
-
     kg_graph_data = KGRecDataset(args)
-    extractor = Extractor(args=args, srcKG=kg_graph_data, recData=rec_data)
+    args.update({'device': device, 'ent2id' : kg_graph_data.ent2id,'rel2id' : kg_graph_data.rel2id,})
+    rec_data = RecTrainDataset(args)
 
+    extractor = Extractor(args=args, srcKG=kg_graph_data, recData=rec_data)
     Rec_data_loader = torch.utils.data.DataLoader(
         rec_data,
         batch_size=args["extract_batch_size"],
