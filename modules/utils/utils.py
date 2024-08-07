@@ -190,6 +190,17 @@ def edge_softmax(edge_index, edge_attr):
     
     return edge_attr
 
+def edge_softmax(heads, tails, edge_attr): # Ensure that the output edge is normalized(multi-attrs to one item)
+    unique_dst, inv_idx = torch.unique(heads, return_inverse=True)
+    
+    edge_attr = torch.exp(edge_attr)
+    
+    sum_att_per_dst = scatter_sum(edge_attr, inv_idx, dim=0, dim_size=unique_dst.size(0))
+    
+    edge_attr = edge_attr / sum_att_per_dst[inv_idx]
+    
+    return edge_attr
+
 def getLabel(test_data, pred_data):
     r = []
     for i in range(len(test_data)):

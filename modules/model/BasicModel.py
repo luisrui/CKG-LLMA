@@ -2,6 +2,8 @@ import os
 import json
 import torch
 from torch import nn   
+import math
+import torch.nn.functional as F
 
 class BasicModel(nn.Module):    
     def __init__(self):
@@ -59,3 +61,34 @@ class Sampler(object):
 
     def __iter__(self):
         raise NotImplementedError
+
+class CrossAttentionLayer(nn.Module):
+    def __init__(self, emb_size, num_heads=8):
+        super(CrossAttentionLayer, self).__init__()
+        self.emb_size = emb_size
+        self.num_heads = num_heads
+        self.head_dim = emb_size // num_heads
+        assert self.head_dim * num_heads == emb_size, "emb_size must be divisible by num_heads"
+        
+        self.W_q = nn.Linear(emb_size, emb_size)
+        self.W_k = nn.Linear(emb_size, emb_size)
+        self.W_v = nn.Linear(emb_size, emb_size)
+
+    def forward(self, query, key, value, mask=None):
+        item_num, entity_num, _ = query.size()
+        
+        q = self.W_q(query)
+        k = self.W_k(key)
+        v = self.W_v(value)
+        
+        attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.emb_size)
+        
+        if mask is not None:
+            attn_scores = attn_scores.masked_fill(mask.unsqueeze(1) == 0, -9e15)
+        
+        attn_probs = F.softmax(attn_scores, dim=-1)
+        #attn_probs = attn_probs.permute(0, 2, 3, 1).contiguous().view(item_num, entity_num, self.num_heads)
+        context = torch.matmul(attn_probs, v)
+        
+        context = context.transpose(1, 2).contiguous().view(item_num, entity_num, -1)
+        return context

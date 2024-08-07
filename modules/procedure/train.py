@@ -8,7 +8,8 @@ from collections import deque, defaultdict
 from tqdm import trange
 #from ..data import LLM_import_path
 from ..data import ReshufflingLoader
-from ..utils import triples_transfer_to_graph, WandBLogger, Contrast, Generate_rectify_info
+from ..model import Contrast
+from ..utils import triples_transfer_to_graph, WandBLogger, Generate_rectify_info
 from .test import Test, Test_origin
 from .procedure import *
 
@@ -35,7 +36,8 @@ def Train(
         # KGE learning
         if epoch%args['train_interval_kge'] == 0 and args['train_kge']:
             print("Train KGE:")
-            kge_loss = TransR_train(args, kg_train_data, model, optimizer, device)
+            kge_loss = TransE_train(args, kg_train_data, model, optimizer, device)
+            #kge_loss = TransR_train(args, kg_train_data, model, optimizer, device)
             print(f"trans Loss: {kge_loss:.3f}")
         else:
             kge_loss = 0. 

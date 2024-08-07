@@ -63,16 +63,16 @@ class KGDataset(torch.utils.data.Dataset):
                 if(len(tails) > self.entity_num):
                     # i2es[item] = torch.IntTensor(tails).to(device)[:self.entity_num]
                     # i2rs[item] = torch.IntTensor(relations).to(device)[:self.entity_num]
-                    i2es[item] = tails[:self.entity_num]
-                    i2rs[item] = relations[:self.entity_num]
+                    i2es[item] = np.array(tails[:self.entity_num])
+                    i2rs[item] = np.array(relations[:self.entity_num])
                 else:
                     # last embedding pos as padding idx
                     tails.extend([self.num_entity]*(self.entity_num-len(tails)))
                     relations.extend([self.num_relation]*(self.entity_num-len(relations)))
                     # i2es[item] = torch.IntTensor(tails).to(device)
                     # i2rs[item] = torch.IntTensor(relations).to(device)
-                    i2es[item] = tails
-                    i2rs[item] = relations
+                    i2es[item] = np.array(tails)
+                    i2rs[item] = np.array(relations)
             # else:
             #     i2es[item] = torch.IntTensor([self.num_entity]*self.entity_num).to(device)
             #     i2rs[item] = torch.IntTensor([self.num_relation]*self.entity_num).to(device)

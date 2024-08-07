@@ -1,4 +1,4 @@
-cuda: 2
+cuda: 7
 data:
       path: './dataset'
       name: 'Steam'
@@ -8,7 +8,7 @@ Train : True
 wandb : True
 LoadPretrain : 0
 KGPretrain : 0
-ContrastiveSeperate: 1
+ContrastiveSeperate: 0
 ContrastiveFused : 0
 ### Training Configuations
 epoch : 1000
@@ -23,12 +23,12 @@ loss_reg_weight : 0.0001
 extract_batch_size : 32
 max_sample_neighbors : 3
 ### Model Setting(KG Training)
-train_kge : False
+train_kge : True
 kge_batch_size : 1024
 kg_neg_size : 100
 train_interval_kge : 1
-entity_num_per_item : 15
-kgcn : 'RGAT'
+entity_num_per_item : 8
+kgcn : 'OursSingle'
 kg_p_drop : 0.2
 ### Model Setting(BPR Training)
 bpr_batch_size : 2048
@@ -42,7 +42,8 @@ ui_p_drop : 0.001
 # LLM_file: 'MovieLens1M_10_2_e0_enhanced_1600.pkl'
 add_triple_ratio : 0.1
 Recinfo_batch_size: 1000
-confidence_random_drop : 0.3
+confidence_threshold : 0.3
+gumbel_tau : 0.3
 nce_temperatue : 0.2
 mix_ratio : 0.5
 loss_con_weight : 0.1

@@ -2,8 +2,24 @@ from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
 
 import torch
-from ..model import KLMCR
-from ..utils import Contrast
+from ..model import KLMCR, Contrast
+
+def TransE_train(args, kg_train_data, Recmodel, opt, device):
+    Recmodel.train()
+    kgloader = DataLoader(kg_train_data, batch_size=args['kge_batch_size'], drop_last=True)
+    trans_loss = 0.
+    for data in tqdm(kgloader, total=len(kgloader), disable=True):
+        heads = data[0].to(device)
+        relations = data[1].to(device)
+        pos_tails = data[2].to(device)
+        neg_tails = data[3].to(device)
+        kg_batch_loss = Recmodel.calc_kg_loss_transE(
+            heads, relations, pos_tails, neg_tails)
+        trans_loss += kg_batch_loss / len(kgloader)
+        opt.zero_grad()
+        kg_batch_loss.backward()
+        opt.step()
+    return trans_loss.cpu().item()
 
 def TransR_train(args, kg_train_data, Recmodel, opt, device):
     Recmodel.train()
@@ -14,7 +30,7 @@ def TransR_train(args, kg_train_data, Recmodel, opt, device):
         relations = data[1].to(device)
         pos_tails = data[2].to(device)
         neg_tails = data[3].to(device)
-        kg_batch_loss = Recmodel.calc_kg_loss_transE(
+        kg_batch_loss = Recmodel.calc_kg_loss_transR(
             heads, relations, pos_tails, neg_tails)
         trans_loss += kg_batch_loss / len(kgloader)
         opt.zero_grad()

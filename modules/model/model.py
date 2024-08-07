@@ -69,12 +69,14 @@ class KLMCR(BasicModel):
         self.Graph = rec_data.get_norm_adj.to(self.device)
         # self.ItemNet = self.kg_dataset.get_item_net_from_kg(self.num_items)
         self.kg_dict, self.item2relations = kg_data.get_kg_dict()
-        self.i2r_cal, self.i2t_cal = self.item2relations.copy(), self.kg_dict.copy()
-        for item in self.i2r_cal:
-            self.i2r_cal[item] = torch.IntTensor(self.i2r_cal[item]).to(self.device)
-            self.i2t_cal[item] = torch.IntTensor(self.i2t_cal[item]).to(self.device)
+        self.i2e, self.i2r = self.kg_dict.copy(), self.item2relations.copy()
+        for key in self.i2e:
+            self.i2e[key] = torch.IntTensor(self.i2e[key])
+            self.i2r[key] = torch.IntTensor(self.i2r[key])
+        self.item_ids = torch.IntTensor(list(self.kg_dict.keys())).to(self.device)
+        self.item_entities = torch.stack(list(self.i2e.values())).to(self.device)
+        self.item_relations = torch.stack(list(self.i2r.values())).to(self.device)
         #self.W_Q = nn.Parameter(torch.Tensor(self.latent_dim, self.latent_dim))
-        #self.kg_dict = kg_data.kg_dict
 
     def calc_kg_loss_transE(self, h, r, pos_t, neg_t):
         """
@@ -105,15 +107,51 @@ class KLMCR(BasicModel):
             require_pow=True
         )
         loss = kg_loss + self.reg_weight * kge_reg_loss
-        # loss = kg_loss
         return loss
     
+    def calc_kg_loss_transR(self, h, r, pos_t, neg_t):
+        """
+        h:      (kg_batch_size)
+        r:      (kg_batch_size)
+        pos_t:  (kg_batch_size)
+        neg_t:  (kg_batch_size)
+        """
+        r_embed = self.embedding_relation(r)            # (kg_batch_size, relation_dim)
+        W_r = self.gat.layer.W_h[r]                           # (kg_batch_size, entity_dim, entity_dim)
+        
+        h_embed = self.embedding_entity(h)
+        pos_t_embed = self.embedding_entity(pos_t)      # (kg_batch_size, entity_dim)
+        neg_t_embed = self.embedding_entity(neg_t)      # (kg_batch_size, entity_dim)
+
+        r_mul_h = torch.bmm(h_embed.unsqueeze(1), W_r).squeeze(1)             # (kg_batch_size, relation_dim)
+        r_mul_pos_t = torch.bmm(pos_t_embed.unsqueeze(1), W_r).squeeze(1)     # (kg_batch_size, relation_dim)
+        r_mul_neg_t = torch.bmm(neg_t_embed.unsqueeze(1), W_r).squeeze(1)     # (kg_batch_size, relation_dim)
+
+        pos_score = torch.sum(
+            torch.pow(r_mul_h + r_embed - r_mul_pos_t, 2), dim=1)     # (kg_batch_size)
+        neg_score = torch.sum(
+            torch.pow(r_mul_h + r_embed - r_mul_neg_t, 2), dim=1)     # (kg_batch_size)
+
+        kg_loss = (-1.0) * F.logsigmoid(neg_score - pos_score)
+        kg_loss = torch.mean(kg_loss)
+
+        kge_reg_loss = self.reg_loss(
+            h_embed,
+            r_embed,
+            pos_t_embed,
+            neg_t_embed,
+            require_pow=True
+        )
+        loss = kg_loss + self.reg_weight * kge_reg_loss
+        # loss = kg_loss
+        return loss
+
     def computer(self):
         """
         propagate methods for lightGCN
         """
         users_emb = self.embedding_entity.weight[:self.num_users]
-        items_emb = self.cal_item_embedding_from_kg(self.i2t_cal, self.i2r_cal)
+        items_emb = self.cal_item_embedding_from_kg(self.item_entities, self.item_relations, self.item_ids)
         all_emb = torch.cat([users_emb, items_emb])
         embs = [all_emb]
         if self.args['dropout']:
@@ -165,14 +203,12 @@ class KLMCR(BasicModel):
         loss = bpr_loss + self.reg_weight * reg_loss
         return loss, bpr_loss
     
-    def view_computer_all(self, g_droped, kg_droped, rel_droped=None):
+    def view_computer_all(self, g_droped, item_entities, item_relations):
         """
         propagate methods for contrastive lightGCN
         """
-        if rel_droped is None:
-            rel_droped = self.i2r_cal
         users_emb = self.embedding_entity.weight[:self.num_users]
-        items_emb = self.cal_item_embedding_from_kg(kg_droped, rel_droped)
+        items_emb = self.cal_item_embedding_from_kg(item_entities, item_relations, self.item_ids)
         all_emb = torch.cat([users_emb, items_emb])
         #   torch.split(all_emb , [self.num_users, self.num_items])
         embs = [all_emb]
@@ -184,7 +220,7 @@ class KLMCR(BasicModel):
         user_embs, item_embs = torch.split(light_out, [self.num_users, self.num_items])
         return user_embs, item_embs
 
-    def cal_item_embedding_from_kg(self, head2tail: dict, head2rel:dict = None):
+    def cal_item_embedding_from_kg(self, head2tail, head2rel, ids):
         if head2tail is None:
             head2tail = self.kg_dict
 
@@ -196,12 +232,14 @@ class KLMCR(BasicModel):
             return self.cal_item_embedding_mean(head2tail)
         elif (self.kgcn == "Ours"):
             return self.cal_item_embedding_KLMCR(head2tail, head2rel)
+        elif (self.kgcn == "OursSingle"):
+            return self.cal_item_embedding_SingleVariant(head2tail, head2rel, ids)
         elif (self.kgcn == "NO"):
             return self.embedding_entity.weight[self.num_users:self.num_users+self.num_items]
 
     def cal_item_embedding_KLMCR(self, kg: dict, head2rel:dict = None):
         if head2rel is None:
-            head2rel = self.i2r_cal
+            head2rel = self.item_relations
         item_embs = self.embedding_entity(torch.IntTensor(
             list(kg.keys())).to(self.device))  # item_num, emb_dim
         # item_num, entity_num_each
@@ -216,10 +254,20 @@ class KLMCR(BasicModel):
         padding_mask = torch.where(item_entities != self.num_entities, torch.ones_like(
             item_entities), torch.zeros_like(item_entities)).float()
         return self.gat.forward_relation_specific(item_embs, entity_embs, relation_embs, item_relations, padding_mask)
+    
+    def cal_item_embedding_SingleVariant(self, item_entities, item_relations, ids):
+        item_embs = self.embedding_entity(ids)  # item_num, emb_dim
+        # item_num, entity_num_each, emb_dim
+        entity_embs = self.embedding_entity(item_entities)
+        relation_embs = self.embedding_relation(
+            item_relations)  # item_num, entity_num_each, emb_dim
+        padding_mask = torch.where(item_entities != self.num_entities, torch.ones_like(
+            item_entities), torch.zeros_like(item_entities)).float() # item_num, entity_num_each
+        return self.gat.forward_relation_general(item_embs, entity_embs, relation_embs, item_relations, padding_mask)
      
     def cal_item_embedding_rgat(self, kg: dict, head2rel:dict = None):
         if head2rel is None:
-            head2rel = self.i2r_cal
+            head2rel = self.item_relations
         item_embs = self.embedding_entity(torch.IntTensor(
             list(kg.keys())).to(self.device))  # item_num, emb_dim
         # item_num, entity_num_each
