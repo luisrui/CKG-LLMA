@@ -1,41 +1,57 @@
-cuda: 7
+cuda: 4
 data:
       path: './dataset'
       name: 'Steam'
-### Training
-Train: True
-seed: 514
-learning_rate : 0.0001
-epoch : 10000
+      LLM_info : 'LLM'
+### Training Ablation
+Train : True
+wandb : True
+LoadPretrain : 0
+KGPretrain : 0
+isContrastive : 0  ## whether use contrastive learning
+ContrastiveSeperate: 0
+ContrastiveFused : 0
+train_kge : False
+### Training Configuations
+epoch : 1000
 start_epoch : 0
-batch_size : 1024
-### Model Setting
-isPretrain : 0
-kg_neg_size : 100
-max_sample_neighbors : 3
+seed : 2020
+learning_rate : 0.0001
 dataloader_n_workers : 8
 embedding_dim : 64
-ent_embedding_dim : 64
-rel_embedding_dim : 64
-hidden_embedding_dim : 256
-n_layers_lightgcn : 3
-loss_kge_weight : 0.5
 loss_reg_weight : 0.0001
-#### Aggregator
-mess_dropout : [0.1, 0.1, 0.1]
-conv_dim_list : [64, 32, 16]
-aggregation_type : 'bi-interaction'
+### Model Setting(Subgraph Extraction)
+extract_batch_size : 32
+max_sample_neighbors : 3
+### Model Setting(KG Training)
+kge_batch_size : 1024
+kg_neg_size : 100
+train_interval_kge : 1
+entity_num_per_item : 8
+kgcn : 'RGAT'
+kg_p_drop : 0.4
+### Model Setting(BPR Training)
+bpr_batch_size : 2048
+lightGCN_n_layers : 3
+dropout : True
+keep_prob : 0.8
+A_split : False
+ui_p_drop : 0.001
 #### Constrastive Learning
-start_step : 0
-end_step : 0
-con_temperature : 0.2
-loss_con_weight : 0.01
+mix_ratio : 0.5
+nce_temperatue : 0.2
+loss_con_weight : 0.1
+gumbel_tau : 0.1
+confidence_temperature : 5
 ### Evaluation
-load_path : ''
-special_save_hyper : 'ST-layer3'
-save_path : '/data/cairui/KG-LLM-REC/'
 eval_interval : 1
-save_interval : 20
-topks : [10,50,100]
-test_u_batch_size : 1024
+topks : [10]
+test_u_batch_size : 128
+early_stop_epoch : 900
 metrics : ['precision', 'recall', 'ndcg']
+metric_decimal_place : 6
+### Saving
+special_save_hyper : 'bi-inter'
+load_path : ''
+save_path : '/data/cairui/KG-LLM-REC/checkpoint/Model/'
+save_interval : 1

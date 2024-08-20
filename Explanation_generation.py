@@ -33,7 +33,14 @@ if __name__ == "__main__":
         num_workers=args["dataloader_n_workers"],
     )
 
+    Recmodel = KLMCR(
+        args = args,
+        rec_data = rec_data,
+        kg_data = kg_train_data
+    )
+    if args["load_path"] and len(args["load_path"]) > 0:
+        Recmodel.load_checkpoint(args["load_path"], device)
+
     print("topks selected: ", args["topks"])
 
-    Prompt_explanation_generation(1, args, KGRecDataset, extractor, rec_data)
-
+    Generate_subgraphs(1, args, Rec_data_loader, extractor, rec_data)

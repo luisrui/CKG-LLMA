@@ -13,6 +13,13 @@ data_config = {
         'num_users' : 53533,
         'num_items' : 13232,
     },
+    'Anime' : {
+        'user' : 'user',
+        'item' : 'anime',
+        'review' : 'review',
+        'num_users' : 18394,
+        'num_items' : 10228,
+    },
     'MovieLens100K' : {
         'user' : 'User',
         'item' : 'Item', 

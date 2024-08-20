@@ -32,8 +32,9 @@ class KGDataset(torch.utils.data.Dataset):
         self.name = args['data']['name']
         self._data_dir = f'./dataset/{args["data"]["name"]}/'
 
-        triples = pd.read_csv(os.path.join(self._data_dir, 'kg.txt'), sep=' ', names=['h', 'r', 't'], engine='python') 
+        triples = pd.read_csv(os.path.join(self._data_dir, 'kg_retained.txt'), sep=' ', names=['h', 'r', 't'], engine='python') 
         self.kg_data = triples
+        self.size = len(triples)
         #self.kg_data = triples.drop_duplicates()
         self.num_users = args['num_users']
         self.num_items = args['num_items']
@@ -111,7 +112,7 @@ class KGRecDataset(torch_geometric.data.Dataset):
 
         #self.i_of_u = defaultdict(list) ## item-user with Liked relation
         self.u_of_i_all = defaultdict(list) ## user-item with Liked relation
-        self.u_of_u = defaultdict(list) ## user-user with Co-liked relation
+
         self.i_of_a = defaultdict(list) ## item-attribute with Has attr relations
         self.i_of_i = defaultdict(list) ## item-item with Co-attr relations
         self.t_of_hr = defaultdict(list) ## tail_2_head_relation triples
@@ -120,7 +121,7 @@ class KGRecDataset(torch_geometric.data.Dataset):
 
         self.struc_dataset = self.get(0)
 
-        if os.path.exists(f'./dataset/{self.name}/pre_saved/u_of_u.pt'):
+        if os.path.exists(f'./dataset/{self.name}/pre_saved/i_of_a.pt'):
             self._load_adj()
             # Build self.i_of_i
             edge_index = self.struc_dataset.edge_index
@@ -143,7 +144,6 @@ class KGRecDataset(torch_geometric.data.Dataset):
     
     def _load_adj(self):
         self.u_of_i_all = torch.load(f'./dataset/{self.name}/pre_saved/u_of_i_all.pt')
-        self.u_of_u = torch.load(f'./dataset/{self.name}/pre_saved/u_of_u.pt')
         #self.i_of_i = torch.load(f'./dataset/{self.name}/pre_saved/i_of_i.pt')
         self.i_of_a = torch.load(f'./dataset/{self.name}/pre_saved/i_of_a.pt')
         self.t_of_hr = torch.load(f'./dataset/{self.name}/pre_saved/t_of_hr.pt')
@@ -193,11 +193,11 @@ class KGRecDataset(torch_geometric.data.Dataset):
         # self.i_of_u = {i + self.num_user: np.flatnonzero(row).tolist() for i, row in enumerate(item_user.numpy())}
 
         ## Build self.u_of_u
-        print('Building user-user relations...')
-        user_user = torch.zeros((self.num_user, self.num_user), dtype=torch.bool)
-        coliked_mask = (edge_type == self.rel2id['co-liked']) & (edge_index[0] < self.num_user) & (edge_index[1] < self.num_user)
-        user_user[edge_index[0][coliked_mask], edge_index[1][coliked_mask]] = True
-        self.u_of_u = {u: np.flatnonzero(row).tolist() for u, row in enumerate(user_user.numpy())}
+        # print('Building user-user relations...')
+        # user_user = torch.zeros((self.num_user, self.num_user), dtype=torch.bool)
+        # coliked_mask = (edge_type == self.rel2id['co-liked']) & (edge_index[0] < self.num_user) & (edge_index[1] < self.num_user)
+        # user_user[edge_index[0][coliked_mask], edge_index[1][coliked_mask]] = True
+        # self.u_of_u = {u: np.flatnonzero(row).tolist() for u, row in enumerate(user_user.numpy())}
         
         # Build self.i_of_i
         # print('Building item-item relations...')
@@ -227,7 +227,7 @@ class KGRecDataset(torch_geometric.data.Dataset):
 
         os.makedirs(f'./dataset/{self.name}/pre_saved/', exist_ok=True)
         print('saving pre-saved relations...')
-        torch.save(self.u_of_u, f'./dataset/{self.name}/pre_saved/u_of_u.pt')
+        # torch.save(self.u_of_u, f'./dataset/{self.name}/pre_saved/u_of_u.pt')
         torch.save(self.i_of_i, f'./dataset/{self.name}/pre_saved/i_of_i.pt') 
         torch.save(self.u_of_i_all, f'./dataset/{self.name}/pre_saved/u_of_i_all.pt')
         #torch.save(self.i_of_u, f'./dataset/{self.name}/pre_saved/i_of_u.pt')
@@ -387,14 +387,14 @@ class RecTrainDataset(torch.utils.data.Dataset):
 class LLMPoolDataset(torch.utils.data.Dataset):
     '''
     '''
-    def __init__(self, args):
+    def __init__(self, args, graph_size):
         print('Loading LLM Enhanced Information...')
         self._LLM_info_dir = os.path.join(args['data']['path'], args['data']['name'], args['data']['LLM_info'])
         self.ii_del = pd.read_csv(os.path.join(self._LLM_info_dir, 'ii_del.csv'))
         self.ii_add = pd.read_csv(os.path.join(self._LLM_info_dir, 'ii_add.csv'))
         self.ui_del = pd.read_csv(os.path.join(self._LLM_info_dir, 'ui_del.csv'))
         self.ui_add = pd.read_csv(os.path.join(self._LLM_info_dir, 'ui_add.csv'))
-        self.add_triple_ratio = args['add_triple_ratio']
+        self.graph_size = graph_size
 
     def __len__(self):
         return min(len(self.ii_del), len(self.ii_add), len(self.ui_del), len(self.ui_add))
@@ -402,14 +402,20 @@ class LLMPoolDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return self.ii_del.iloc[idx], self.ii_del.iloc[idx], self.ii_del.iloc[idx], self.ii_del.iloc[idx]
     
-    def generate_batch(self, batch_size):
-        random_idx = np.random.choice(len(self.ii_add), int(batch_size * self.add_triple_ratio), replace=False)
+    def generate_batch(self, delete_ratio, add_ratio):
+        ui_add_size = min(int(self.graph_size * add_ratio),len(self.ui_add))
+        ui_delete_size = min(int(self.graph_size * delete_ratio), len(self.ui_del))
+        ii_add_size = min(int(self.graph_size * add_ratio),len(self.ii_add))
+        ii_delete_size = min(int(self.graph_size * delete_ratio), len(self.ii_del))
+
+        random_idx = np.random.choice(len(self.ii_add), ii_add_size, replace=False)
         ii_add = [tuple(self.ii_add.iloc[idx]) for idx in random_idx]
-        random_idx = np.random.choice(len(self.ii_del), int(batch_size), replace=False)
+        random_idx = np.random.choice(len(self.ii_del), ii_delete_size, replace=False)
         ii_del = [tuple(self.ii_del.iloc[idx]) for idx in random_idx]
-        random_idx = np.random.choice(len(self.ui_add), int(batch_size * self.add_triple_ratio), replace=False)
+        
+        random_idx = np.random.choice(len(self.ui_add), ui_add_size, replace=False)
         ui_add = [tuple(self.ui_add.iloc[idx]) for idx in random_idx]
-        random_idx = np.random.choice(len(self.ui_del), int(batch_size), replace=False)
+        random_idx = np.random.choice(len(self.ui_del), ui_delete_size, replace=False)
         ui_del = [tuple(self.ui_del.iloc[idx]) for idx in random_idx]
         del_cands = [item[2] for item in ui_del if item[1] == 0]
         #print(del_cands)

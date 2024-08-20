@@ -20,14 +20,15 @@ if __name__ == "__main__":
     set_random_seed(seed=args["seed"])
     
     device = "cuda:" + str(args["cuda"]) if int(args["cuda"]) >= 0 else "cpu"
-    #device = 'cpu'
+    if args['debug']:
+        device = 'cpu'
     rec_data = RecTrainDataset(args)
     args.update({'device': device, 'ent2id' : rec_data.ent2id,'rel2id' : rec_data.rel2id,})
 
     kg_train_data = KGDataset(args)
     #LLM_rectify_data = LLMRectifyDataset(args)
     if args['ContrastiveSeperate'] or args['ContrastiveFused']:
-        LLM_rectify_data = LLMPoolDataset(args)
+        LLM_rectify_data = LLMPoolDataset(args, graph_size=kg_train_data.size)
     else:
         LLM_rectify_data = None
 
@@ -54,12 +55,6 @@ if __name__ == "__main__":
     print("topks selected: ", args["topks"])
 
     if args['Train']:
-        #Pretrain_KG_Embeddings(50, args, Recmodel, Rec_data_loader, rec_data, optimizer, scheduler, device)
-        #TrainwithGraph(27, args, Recmodel, rec_data, extractor, optimizer, scheduler, device)
         Train(args, Recmodel, rec_data, kg_train_data, LLM_rectify_data, contrast_model, optimizer, scheduler)
-        #result = Test(args, rec_data, Recmodel, "test", device)
-        # Generate_subgraphs(1, args, Rec_data_loader, extractor, rec_data)
-        #Prompt_Length_Test(50, 'Llama3', Rec_data_loader, extractor, rec_data)
-        #Recmodel.generate_entity_relation_embeddings(save_path='checkpoint/saved_embs/')
     else:
         result = Test(args, rec_data, Recmodel, "test", device)

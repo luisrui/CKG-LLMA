@@ -123,3 +123,31 @@ def BPR_train_contrast(
     adj_loss = adj_loss / (total_batch*batch_size)
     #return total_loss, bpr_loss, con_loss
     return total_loss, bpr_loss, con_loss, adj_loss
+
+def BPR_train_origin(args, rec_data, Recmodel, optimizer):
+    Recmodel.train()
+    batch_size = args['bpr_batch_size']
+    device = args['device']
+    dataloader = DataLoader(rec_data, batch_size=batch_size,
+                            shuffle=True, drop_last=True, num_workers=12)
+
+    total_batch = len(dataloader)
+    total_loss = 0.
+    for batch_i, train_data in tqdm(iterable=enumerate(dataloader), total=len(dataloader), disable=True):
+        batch_users = train_data[0].long().to(device)
+        batch_pos = train_data[1].long().to(device)
+        batch_neg = train_data[2].long().to(device)
+
+        # main task (batch based)
+        # bpr loss for a batch of users
+        l_bpr_reg, l_bpr = Recmodel.calc_bpr_loss(batch_users, batch_pos, batch_neg)
+        l_all = l_bpr_reg
+
+        optimizer.zero_grad()
+        l_all.backward()
+        optimizer.step()
+
+        total_loss += l_all.cpu().item()
+
+    total_loss = total_loss / (total_batch*batch_size)
+    return total_loss, l_bpr_reg

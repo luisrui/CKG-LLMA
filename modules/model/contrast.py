@@ -29,7 +29,7 @@ class Contrast(nn.Module):
         self.device = args['device']
         self.isSeperated = args['ContrastiveSeperate']
         self.isFused = args['ContrastiveFused']
-
+        
         self.tau = args['nce_temperatue']
         self.kg_p_drop = args['kg_p_drop']
         self.ui_p_drop = args['ui_p_drop']
@@ -38,10 +38,11 @@ class Contrast(nn.Module):
         self.num_items = self.model.num_items
         self.item_np = rec_data.item_np
         self.user_np = rec_data.user_np
-        self.confi_thres = args['confidence_threshold']
         self.emb_size = self.model.latent_dim
+        self.confi_tau = args['confidence_temperature']
         self.gb_tau = args['gumbel_tau']
-        self.cross_attention = CrossAttentionLayer(self.emb_size, num_heads=8)
+        self.isConfiFilter = args['isConfiFilter']
+        self.isApplyLLMinfo = args['isApplyLLMinfo']
 
     def sim(self, z1: torch.Tensor, z2: torch.Tensor):
         if z1.size()[0] == z2.size()[0]:
@@ -65,8 +66,8 @@ class Contrast(nn.Module):
         return loss
 
     def get_kg_views(self, rectify_info : dict):
-        h2t = self.model.kg_dict
-        h2r = self.model.item2relations
+        h2t = self.model.i2e
+        h2r = self.model.i2r
         if self.isSeperated:
             view1, rel_v1 = self.drop_edge_random(
                 h2t, h2r, self.kg_p_drop, self.model.num_entities)
@@ -85,22 +86,23 @@ class Contrast(nn.Module):
             }
         elif self.isFused:
             i_ids, i_ents_v1, i_rels_v1 = self.drop_edge_random_rectify(
-                h2t, h2r, rectify_info, 'ii', self.kg_p_drop, self.model.num_entities, self.model.num_relations)
+                h2t, h2r, rectify_info, 'ii', self.kg_p_drop, self.model.num_entities)
             i_ids, i_ents_v2, i_rels_v2 = self.drop_edge_random_rectify(
-                h2t, h2r, rectify_info, 'ui', self.kg_p_drop, self.model.num_entities, self.model.num_relations)
+                h2t, h2r, rectify_info, 'ui', self.kg_p_drop, self.model.num_entities)
             return {
                 'item_ids' : i_ids,
                 'entv1' : i_ents_v1, 'relv1' : i_rels_v1,
                 'entv2' : i_ents_v2, 'relv2' : i_rels_v2
             }
         else:
-            view1, rel_v1 = self.drop_edge_random(
+            i_ids, i_ents_v1, i_rels_v1 = self.drop_edge_random(
                 h2t, h2r, self.kg_p_drop, self.model.num_entities)
-            view2, rel_v2 = self.drop_edge_random(
+            i_ids, i_ents_v2, i_rels_v2 = self.drop_edge_random(
                 h2t, h2r, self.kg_p_drop, self.model.num_entities)
             return {
-                'view1' : view1, 'relv1' : rel_v1,
-                'view2' : view2, 'relv2' : rel_v2
+                'item_ids' : i_ids,
+                'entv1' : i_ents_v1, 'relv1' : i_rels_v1,
+                'entv2' : i_ents_v2, 'relv2' : i_rels_v2
             }
 
     def get_ui_views_weighted(self, item_stabilities, del_cands = None):
@@ -151,13 +153,10 @@ class Contrast(nn.Module):
         keep_idx = list()
             # overall sample rate = 0.4*0.9 = 0.36
         for i, j in enumerate(item_np.tolist()):
-            if del_cands and j not in del_cands:
-                continue
+            # if del_cands and j not in del_cands:
+            #     continue
             if item_mask[j - self.num_users] and random() > 0.6:
                 keep_idx.append(i)
-        # for i, j in enumerate(item_np.tolist()):
-        #     if item_mask[j - self.num_users] and random() > 0.6:
-        #         keep_idx.append(i)
         # add random samples
         interaction_random_sample = sample(
             list(range(len(item_np))), int(len(item_np)*self.mix_ratio))
@@ -222,8 +221,9 @@ class Contrast(nn.Module):
         elif self.isFused:
             item_ids = collect_info['item_ids']
             v_ii, rel_ii, v_ui, rel_ui = collect_info['entv1'], collect_info['relv1'], collect_info['entv2'], collect_info['relv2']
-        else: 
-            v_1, r_1, v_2, r_2 = collect_info['view1'], collect_info['relv1'], collect_info['view2'], collect_info['relv2']
+        else:
+            item_ids = collect_info['item_ids']
+            v_1, r_1, v_2, r_2 = collect_info['entv1'], collect_info['relv1'], collect_info['entv2'], collect_info['relv2']
 
         if self.isSeperated:
             stability = self.item_kg_stability(v_1, r_1, v_2, r_2).to(self.device)
@@ -248,7 +248,7 @@ class Contrast(nn.Module):
                 "uiv2": uiv2, 'relv2': rel_ui, 'v_2' : v_ui,
             }
         else:
-            stability = self.item_kg_stability(v_1, r_1, v_2, r_2).to(self.device)
+            stability = self.item_kg_stability(v_1, r_1, v_2, r_2, item_ids).to(self.device)
             uiv1 = self.get_ui_views_weighted(stability)
             uiv2 = self.get_ui_views_weighted(stability)
             contrast_views = {
@@ -266,57 +266,57 @@ class Contrast(nn.Module):
         item_relations (item_num, ent_num)
         attention (item_num, ent_num)
         '''
-        W_h = self.model.gat.layer.W_h # num_rels, e_embs, e_embs
-        w_hr  = W_h[item_relations] # (item_num, ent_num, dim, dim)
+        fc = self.model.gat.layer.fc
+        leakyrelu = self.model.gat.layer.leakyrelu
 
-        head_query = torch.einsum('ijkl,ijl->ijk', w_hr, item_embs)
-        tail_key = torch.einsum('ijkl,ijl->ijk', w_hr, entity_embs)
+        #item_conv = self.cross_attention_head(query=tail_embs, key=rel_embs, value=head_embs, mask=padding_mask)
+        #ent_conv = cross_attention(query=item_embs, key=rel_embs, value=entity_embs, mask=padding_mask)
+        a_input = torch.cat((item_embs, entity_embs), dim=-1) # item_num, ent_num, 2*dim
+        edge_weight = torch.multiply(fc(a_input), rel_embs).sum(dim=-1)
+        edge_weight = leakyrelu(edge_weight)
 
-        #edge_attn = (query * (key * value)).sum(dim=-1) / math.sqrt(emb_size)
-        #edge_attn = torch.multiply(head_query + tail_key, rel_embs).sum(dim=-1) / math.sqrt(emb_size)
-        #edge_weight = torch.multiply(head_query + tail_key, rel_embs).sum(dim=-1)
-        #zero_vec = -9e15*torch.ones_like(edge_weight)
-        #edge_weight = torch.where(padding_mask > 0, edge_weight, zero_vec) # item_num, ent_num
-
-        'please input cross attention logic here:'
-        rel_value = rel_embs
-        cross_attn_weights = self.cross_attention(head_query, tail_key, rel_value, padding_mask)
-        
-        # Combine self-attention and cross-attention
-        cross_attention_scores = cross_attn_weights.mean(dim=-1)  # Average over heads
-        #cross_attention_scores = (edge_weight + cross_attention_scores) / 2
-
-        zero_vec = -9e15*torch.ones_like(cross_attention_scores)
-        cross_attention_scores = torch.where(padding_mask > 0, cross_attention_scores, zero_vec) # item_num, ent_num
-        combined_attention = F.sigmoid(cross_attention_scores)
+        # ## normalization by head_node degree
+        # item_degrees = torch.sum(padding_mask, dim=-1).unsqueeze(-1)
+        # degree_matrix = item_degrees.expand_as(edge_weight)
+        sign_matrix = torch.sign(edge_weight)
+        # degree_matrix = degree_matrix * sign_matrix
+        # edge_weight = edge_weight * degree_matrix
+        edge_weight = edge_weight * sign_matrix
+        zero_vec = -9e15*torch.ones_like(edge_weight)
+        triple_confi = torch.where(padding_mask > 0, edge_weight, zero_vec) # item_num, ent_num
+        edge_confi = F.sigmoid(triple_confi * self.confi_tau)
 
         # Standard Normalization
         # edge_confi = torch.exp(edge_attn)
         # edge_confi = (edge_confi - edge_confi.min()) / (edge_confi.max() - edge_confi.min())
         # edge_confi = (1 - self.kg_p_drop) / torch.mean(edge_confi) * (edge_confi)
 
-        # normalization by head_node degree
-        # norm = scatter_sum(torch.ones_like(batch_heads), batch_heads, dim=0, dim_size=entity_emb.weight.shape[0])
-        # norm = torch.index_select(norm, 0, batch_heads)
-        # edge_attn_score = edge_attn_score * norm
-
-        return combined_attention
+        return edge_confi
     
     def filter_LLM_info(self, item_ids, item_entities, item_relations):
+        #attr_ids = self.model.attr_ids
+        padding = self.model.num_entities
+        #entity_items = self.model.get_reverse_kg(item_entities)
         item_embs = self.model.embedding_entity(item_ids)
-        entity_embs = self.model.embedding_entity(item_entities) 
-        item_embs = item_embs.unsqueeze(1).expand(entity_embs.size())
-        relation_embs = self.model.embedding_relation(item_relations)  
-        padding_mask = torch.where(item_entities != self.model.num_entities, torch.ones_like(
-            item_entities), torch.zeros_like(item_entities)).float()
-
-        edge_confi = self.confidence_drop(item_embs, entity_embs, relation_embs, item_relations, padding_mask)
-
+        # attr_embs = self.model.embedding_entity(attr_ids)
+        i2e_embs = self.model.embedding_entity(item_entities)
+        # e2i_embs = self.model.embedding_entity(entity_items)
+        padding_mask_i2e = torch.where(item_entities != padding, torch.ones_like(
+            item_entities), torch.zeros_like(item_entities)).float() # N_item, e_num    
+        # padding_mask_e2i = torch.where(entity_items != padding, torch.ones_like(
+        #     entity_items), torch.zeros_like(entity_items)).float() # N_ent, i_num 
+        # item_embs = self.model.gat.fusion_item_embs(item_embs, i2e_embs, padding_mask_i2e) # N_item, dim
+        # We = self.model.gat.fusion_attr_embs(attr_embs, e2i_embs, padding_mask_e2i) # N_ent, dim
+        # entity_embs = self.model.renew_entity_embs(item_entities, We)
+        relation_embs = self.model.embedding_relation(
+            item_relations)  # item_num, entity_num_each, emb_dim
+        item_embs = item_embs.unsqueeze(1).expand(i2e_embs.size())
+        edge_confi = self.confidence_drop(item_embs, i2e_embs, relation_embs, item_relations, padding_mask_i2e)
         ### The Gumbel softmax filtering trick:
         logits = torch.stack([edge_confi, 1 - edge_confi], dim=-1)
         gumbel_out = F.gumbel_softmax(logits, tau=self.gb_tau, hard=True)
         decisions = gumbel_out[:, :, 0] # The decisions to keep the triples
-        print(f'kg keep ratio : {torch.sum(torch.logical_and(decisions, padding_mask))/torch.sum(padding_mask)}')
+        print(f'kg keep ratio : {torch.sum(torch.logical_and(decisions, padding_mask_i2e))/torch.sum(padding_mask_i2e)}')
         return decisions
     
     def _delete_triples(self, res_e, tri2del, padding_e):
@@ -327,45 +327,59 @@ class Contrast(nn.Module):
 
     def _add_triples(self, res_e, res_r, tri2add, padding_e):
         for head, rel, tail in tri2add:
-            mask = res_e[head] == padding_e
-            if mask.any():
-                idx = mask.nonzero()[0][0]
-                res_e[head][idx] = tail
-                res_r[head][idx] = rel
+            try:
+                mask = res_e[head] == padding_e
+                if mask.any():
+                    idx = mask.nonzero()[0][0]
+                    res_e[head][idx] = tail
+                    res_r[head][idx] = rel
+            except:
+                continue
 
-    def drop_edge_random_rectify(self, head2tail, head2rel, rectify_info, subgraph:str, p_drop, padding_e, padding_r):
+    def drop_edge_random_rectify(self, head2tail, head2rel, rectify_info, subgraph:str, p_drop, padding):
         res_e = head2tail.copy()
         res_r = head2rel.copy()
-        tri2add = rectify_info[f'{subgraph}_add']
-        tri2del = rectify_info[f'{subgraph}_del']
-        self._delete_triples(res_e, tri2del, padding_e)
-        self._add_triples(res_e, res_r, tri2add, padding_e)
-        for key in res_e:
-            res_e[key] = torch.IntTensor(res_e[key]).to(self.device)
-            res_r[key] = torch.IntTensor(res_r[key]).to(self.device)
+        if self.isApplyLLMinfo:
+            tri2add = rectify_info[f'{subgraph}_add']
+            tri2del = rectify_info[f'{subgraph}_del']
+            self._delete_triples(res_e, tri2del, padding)
+            self._add_triples(res_e, res_r, tri2add, padding)
         item_ids = torch.IntTensor(list(res_e.keys())).to(self.device)
-        item_entities = torch.stack(list(res_e.values()))
-        item_relations = torch.stack(list(res_r.values()))
-        ## rectify based on LLM
-        entity_mask = self.filter_LLM_info(item_ids, item_entities, item_relations)
-        replacement = torch.full_like(item_entities, self.model.num_entities)
-        item_entities = torch.where(entity_mask.bool(), item_entities, replacement)
+        item_entities = torch.stack(list(res_e.values())).to(self.device)
+        item_relations = torch.stack(list(res_r.values())).to(self.device)
+        
+        ## rectify LLM information based on attention confidence
+        if self.isConfiFilter:
+            entity_mask = self.filter_LLM_info(item_ids, item_entities, item_relations)
+            replacement = torch.full_like(item_entities, self.model.num_entities)
+            item_entities = torch.where(entity_mask.bool(), item_entities, replacement)
+        
         ## Random Dropout
-        #item_entities = item_entities * torch.bernoulli(1 - p_drop)
+        # origin_padding = torch.where(item_entities != self.model.num_entities, torch.ones_like(
+        #     item_entities), torch.zeros_like(item_entities)).float()
+        # random_tensor = torch.rand_like(item_entities, dtype=torch.float)
+        # mask = random_tensor > p_drop
+        # padding_tensor = torch.full_like(item_entities, padding)
+        # item_entities = torch.where(mask, item_entities, padding_tensor).to(self.device)
+        # item_relations = item_relations.to(self.device)
+        # print(f'kg keep ratio : {torch.sum(torch.logical_and(mask, origin_padding))/torch.sum(origin_padding)}')
         return item_ids, item_entities, item_relations
-    
+
     def drop_edge_random(self, head2tail, head2rel, p_drop, padding):
-        res_e = dict()
+        res_e = head2tail.copy()
         res_r = head2rel.copy()
         item_ids = torch.IntTensor(list(res_e.keys())).to(self.device)
         item_entities = torch.stack(list(res_e.values()))
         item_relations = torch.stack(list(res_r.values()))
-
+        
+        origin_padding = torch.where(item_entities != self.model.num_entities, torch.ones_like(
+            item_entities), torch.zeros_like(item_entities)).float()
         random_tensor = torch.rand_like(item_entities, dtype=torch.float)
-        mask = random_tensor < p_drop
+        mask = random_tensor > p_drop
         padding_tensor = torch.full_like(item_entities, padding)
-        item_entities = torch.where(mask, padding_tensor, item_entities).to(self.device)
+        item_entities = torch.where(mask, item_entities, padding_tensor).to(self.device)
         item_relations = item_relations.to(self.device)
+        print(f'kg keep ratio : {torch.sum(torch.logical_and(mask, origin_padding))/torch.sum(origin_padding)}')
         return item_ids, item_entities, item_relations
     
     def drop_LLM_rectify(self, head2tail, head2rel, rectify_info, subgraph:str, padding_e, padding_r):
@@ -377,9 +391,6 @@ class Contrast(nn.Module):
         num_add, num_del = tri2add.shape[0], tri2del.shape[0]
         heads, relations, tails = combined_triples[:, 0].to(self.device), combined_triples[:, 1].to(self.device), combined_triples[:, 2].to(self.device)
         batch_confi = self.confidence_drop(heads, relations, tails)
-        
-        #triple_mask = batch_confi > self.confi_thres
-        ### The Gumbel softmax filtering trick:
         logits = torch.stack([batch_confi, 1 - batch_confi], dim=-1)
         gumbel_out = F.gumbel_softmax(logits, tau=self.gb_tau, hard=True)
         decisions = gumbel_out[:, 0]
@@ -407,37 +418,3 @@ class Contrast(nn.Module):
             res_t[key] = torch.IntTensor(res_t[key]).to(self.device)
             res_r[key] = torch.IntTensor(res_r[key]).to(self.device)
         return res_t, res_r
-    
-    # def confidence_drop(self, item_embs, entity_embs, rel_embs, i2r, padding_mask):
-    #     entity_emb = self.model.embedding_entity
-    #     relation_emb = self.model.embedding_relation
-    #     emb_size = self.model.latent_dim
-    #     W_h = self.model.gat.layer.W_h # num_rels, e_embs, e_embs
-    #     #W_e = self.model.gat.layer.W_e # num_rels, e_embs, e_embs
-    #     w_Q  = W_h[batch_relations] # batch_size, e_embs, e_embs
-    #     #w_Qh = W_h[batch_relations] # batch_size, e_embs, e_embs
-    #     #w_Qe  = W_e[batch_relations] # batch_size, e_embs, e_embs
-        
-    #     query = torch.bmm(entity_emb(batch_heads).unsqueeze(1), w_Q).squeeze(1)
-    #     key = torch.bmm(entity_emb(batch_tails).unsqueeze(1), w_Q).squeeze(1)
-    #     value = relation_emb(batch_relations)
-
-    #     #edge_attn = (query * (key * value)).sum(dim=-1) / math.sqrt(emb_size)
-    #     edge_attn = torch.multiply(value, query + key).sum(dim=-1) / math.sqrt(emb_size)
-
-    #     # softmax by head_node
-    #     #edge_attn_logits = edge_attn.mean(-1).detach()
-    #     # edge_attn_score = edge_softmax(batch_heads, batch_tails, edge_attn)
-    #     # edge_attn_score = scatter_softmax(edge_attn_logits, batch_heads)
-
-    #     edge_confi = torch.exp(edge_attn)
-    #     edge_confi = (edge_confi - edge_confi.min()) / (edge_confi.max() - edge_confi.min())
-    #     edge_confi = (1 - self.kg_p_drop) / torch.mean(edge_confi) * (edge_confi)
-    #     edge_attn_score = edge_confi
-
-    #     # normalization by head_node degree
-    #     # norm = scatter_sum(torch.ones_like(batch_heads), batch_heads, dim=0, dim_size=entity_emb.weight.shape[0])
-    #     # norm = torch.index_select(norm, 0, batch_heads)
-    #     # edge_attn_score = edge_attn_score * norm
-
-    #     return edge_attn_score

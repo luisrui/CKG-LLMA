@@ -30,7 +30,7 @@ class Extractor():
         self.num_items = args['num_items']
         
         self.u_of_i = recData.u_of_i
-        self.u_of_u = srcKG.u_of_u
+        #self.u_of_u = srcKG.u_of_u
         self.i_of_i = srcKG.i_of_i
         self.i_of_a = srcKG.i_of_a
         # self.i_of_u = srcKG.i_of_u

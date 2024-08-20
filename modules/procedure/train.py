@@ -44,15 +44,20 @@ def Train(
 
         # SSL learning(Contrstive + BPR)
         #rectify_info = LLM_rectify_data.generate_batch(next(Infoloader))
-        if LLM_rectify_data:
-            rectify_info = LLM_rectify_data.generate_batch(batch_size=args['Recinfo_batch_size'])
+        if args['isContrastive']:
+            if LLM_rectify_data:
+                rectify_info = LLM_rectify_data.generate_batch(delete_ratio = args['delete_ratio'], add_ratio = args['add_ratio'])
+            else:
+                rectify_info = None
+            contrast_views = contrast_model.get_views(rectify_info=rectify_info)
+            # joint learning part
+            print("[Joint Learning]")
+            (total_loss, bpr_loss, con_loss, adj_loss) = \
+                BPR_train_contrast(args, rec_data, model, contrast_model, contrast_views, optimizer, epoch+1)
         else:
-            rectify_info = None
-        contrast_views = contrast_model.get_views(rectify_info=rectify_info)
-        # joint learning part
-        print("[Joint Learning]")
-        (total_loss, bpr_loss, con_loss, adj_loss) = \
-            BPR_train_contrast(args, rec_data, model, contrast_model, contrast_views, optimizer, epoch+1)
+            total_loss, bpr_loss = BPR_train_origin(args, rec_data, model, optimizer)
+            con_loss = 0.
+            adj_loss = 0.
 
         if (epoch + 1) % args['eval_interval'] == 0:
             print("[Valid]")
@@ -82,7 +87,7 @@ def Train(
                 best_result = results_test
                 print("Find a better model")
                 model.save_checkpoint(
-                    args['save_path'] + f"{type(model).__name__}_{args['data']['name']}.ckpt")
+                    args['save_path'] + f"{args['special_save_hyper']}_{type(model).__name__}_{args['data']['name']}.ckpt")
 
             else:
                 if epoch >= 100:
@@ -94,6 +99,30 @@ def Train(
         scheduler.step()
 
     print(f'Finish Training, the best result is {best_result}')
+
+def Prompt_explanation_generation(args, model, rec_data, extractor, device):
+    '''
+    Prompt for generate explanation for a given user-item pair
+    '''
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def TrainLightGCN(args, model, data_loader, rec_data, extractor, optimizer, scheduler, device):
     steps_per_epoch = len(data_loader)
