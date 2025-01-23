@@ -25,6 +25,7 @@ def Train(
         scheduler):
     if args['wandb']:
         logger = WandBLogger(
+            name=args['wandb_name'],
             config=WandBLogger.get_default_config(),
             variant=args,
         )
@@ -87,7 +88,7 @@ def Train(
                 best_result = results_test
                 print("Find a better model")
                 model.save_checkpoint(
-                    args['save_path'] + f"{args['special_save_hyper']}_{type(model).__name__}_{args['data']['name']}.ckpt")
+                    args['save_path'] + f"{args['wandb_name']}_{type(model).__name__}_{args['data']['name']}.ckpt")
 
             else:
                 if epoch >= 100:

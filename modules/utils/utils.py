@@ -22,6 +22,7 @@ class WandBLogger(object):
         config.online = True
         config.prefix = "KGExplainer"
         config.project = "LLM_KG_Rec"
+        config.run_name = config_dict.placeholder(str)
         config.output_dir = "./log"### load your own checkpoints file path here
         config.experiment_id = config_dict.placeholder(str)
         config.anonymous = config_dict.placeholder(str)
@@ -33,10 +34,10 @@ class WandBLogger(object):
             config.update(ConfigDict(updates).copy_and_resolve_references())
         return config
 
-    def __init__(self, config, variant, enable=True):
+    def __init__(self, name, config, variant, enable=True):
         self.enable = enable
         self.config = self.get_default_config(config)
-
+        self.config.run_name = name
         if self.config.experiment_id is None:
             self.config.experiment_id = uuid.uuid4().hex
 
@@ -66,6 +67,7 @@ class WandBLogger(object):
                 project=self.config.project,
                 dir=self.config.output_dir,
                 id=self.config.experiment_id,
+                name=self.config.run_name,
                 anonymous=self.config.anonymous,
                 notes=self.config.notes,
                 entity=self.config.entity,
@@ -74,7 +76,7 @@ class WandBLogger(object):
                     _disable_stats=True,
                 ),
                 mode="online" if self.config.online else "offline",
-                resume=True,
+                resume=False,
             )
         else:
             self.run = None

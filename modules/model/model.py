@@ -10,9 +10,9 @@ from .KGEmb import *
 from .GAT import GAT
 
 ## Knowledge-enhanced Large-language-model Contrastive Recommender
-class KLMCR(BasicModel):
+class CKG_LLMA(BasicModel):
     def __init__(self, args, rec_data, kg_data):
-        super(KLMCR, self).__init__()
+        super(CKG_LLMA, self).__init__()
 
         self.args = args
         self.device = args['device']
@@ -235,13 +235,13 @@ class KLMCR(BasicModel):
         elif (self.kgcn == "MEAN"):
             return self.cal_item_embedding_mean(item2ent)
         elif (self.kgcn == "Ours"):
-            return self.cal_item_embedding_KLMCR(item2ent, item2rel)
+            return self.cal_item_embedding_CKG_LLMA(item2ent, item2rel)
         elif (self.kgcn == "OursSingle"):
             return self.cal_item_embedding_SingleVariant(item2ent, item2rel, i_ids, ent2item, e_ids)
         elif (self.kgcn == "NO"):
             return self.embedding_entity.weight[self.num_users:self.num_users+self.num_items]
 
-    def cal_item_embedding_KLMCR(self, kg: dict, item2rel:dict = None):
+    def cal_item_embedding_CKG_LLMA(self, kg: dict, item2rel:dict = None):
         if item2rel is None:
             item2rel = self.item_relations
         item_embs = self.embedding_entity(torch.IntTensor(

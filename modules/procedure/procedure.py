@@ -2,7 +2,7 @@ from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
 
 import torch
-from ..model import KLMCR, Contrast
+from ..model import CKG_LLMA, Contrast
 
 def TransE_train(args, kg_train_data, Recmodel, opt, device):
     Recmodel.train()
@@ -41,7 +41,7 @@ def TransR_train(args, kg_train_data, Recmodel, opt, device):
 def BPR_train_contrast(
         args, 
         rec_data, 
-        Recmodel : KLMCR, 
+        Recmodel : CKG_LLMA, 
         contrast_model : Contrast, 
         contrast_views, 
         optimizer,

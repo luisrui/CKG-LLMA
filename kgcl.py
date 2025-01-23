@@ -33,7 +33,7 @@ if __name__ == "__main__":
         num_workers=args["dataloader_n_workers"],
     )
 
-    Recmodel = KLMCR(
+    Recmodel = CKG_LLMA(
         args = args,
         rec_data = rec_data,
         kg_data = kg_train_data

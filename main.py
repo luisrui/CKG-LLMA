@@ -9,9 +9,9 @@ from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, MultiStepLR
 
 if __name__ == "__main__":
     parse = argparse.ArgumentParser()
-    parse.add_argument("--argpath", type=str, default="config/argsML_model.yaml", help="the relative path of argments file")
+    parse.add_argument("--config", type=str, default="config/argsML_model.yaml", help="the relative path of argments file")
     args = parse.parse_args()
-    args = read_yaml(path=args.argpath)
+    args = read_yaml(path=args.config)
     args.update({
         'num_users' : data_config[args["data"]["name"]]["num_users"],
         'num_items' : data_config[args["data"]["name"]]["num_items"]
@@ -39,12 +39,12 @@ if __name__ == "__main__":
         num_workers=args["dataloader_n_workers"],
     )
 
-    Recmodel = KLMCR(
+    Recmodel = CKG_LLMA(
         args = args,
         rec_data = rec_data,
         kg_data = kg_train_data
     )
-    if args["load_path"] and len(args["load_path"]) > 0:
+    if args["load_path"]:
         Recmodel.load_checkpoint(args["load_path"], device)
     Recmodel = Recmodel.to(device)
     contrast_model = Contrast(args, Recmodel, rec_data).to(device)

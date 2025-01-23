@@ -1,16 +1,10 @@
-from cppimport import imp
-from numpy import negative, positive
-from torch_sparse.tensor import to
 from random import random, sample
-from .model import KLMCR
-from .BasicModel import CrossAttentionLayer
-from ..utils.utils import edge_softmax
+from .model import CKG_LLMA
+from .MoE import ConfidenceMoELayer
 import torch
 import torch.nn as nn
 import math
 #from torch_geometric.utils import degree, to_undirected
-from torch_scatter import scatter_mean, scatter_sum
-from torch_geometric.utils import softmax as scatter_softmax
 import scipy.sparse as sp
 import numpy as np
 import torch.nn.functional as F
@@ -25,7 +19,7 @@ values=tensor([0.0526, 0.0096, 0.0662,  ..., 0.5000, 0.1443, 0.5000])
 class Contrast(nn.Module):
     def __init__(self, args, model, rec_data):
         super(Contrast, self).__init__()
-        self.model : KLMCR = model
+        self.model : CKG_LLMA = model
         self.device = args['device']
         self.isSeperated = args['ContrastiveSeperate']
         self.isFused = args['ContrastiveFused']
@@ -43,6 +37,11 @@ class Contrast(nn.Module):
         self.gb_tau = args['gumbel_tau']
         self.isConfiFilter = args['isConfiFilter']
         self.isApplyLLMinfo = args['isApplyLLMinfo']
+
+        self.confidence_moe_layer = ConfidenceMoELayer(
+            dim=args['embedding_dim'],
+            num_experts=args['num_experts']
+        )
 
     def sim(self, z1: torch.Tensor, z2: torch.Tensor):
         if z1.size()[0] == z2.size()[0]:
@@ -268,22 +267,27 @@ class Contrast(nn.Module):
         '''
         fc = self.model.gat.layer.fc
         leakyrelu = self.model.gat.layer.leakyrelu
-
+    
         #item_conv = self.cross_attention_head(query=tail_embs, key=rel_embs, value=head_embs, mask=padding_mask)
         #ent_conv = cross_attention(query=item_embs, key=rel_embs, value=entity_embs, mask=padding_mask)
         a_input = torch.cat((item_embs, entity_embs), dim=-1) # item_num, ent_num, 2*dim
-        edge_weight = torch.multiply(fc(a_input), rel_embs).sum(dim=-1)
-        edge_weight = leakyrelu(edge_weight)
+
+        features = fc(a_input)
+        edge_weight = self.confidence_moe_layer(features, rel_embs)
+        #edge_weight = torch.multiply(fc(a_input), rel_embs).sum(dim=-1)
+        #edge_weight = leakyrelu(edge_weight)
+
 
         # ## normalization by head_node degree
         # item_degrees = torch.sum(padding_mask, dim=-1).unsqueeze(-1)
         # degree_matrix = item_degrees.expand_as(edge_weight)
-        sign_matrix = torch.sign(edge_weight)
+        # sign_matrix = torch.sign(edge_weight)
         # degree_matrix = degree_matrix * sign_matrix
         # edge_weight = edge_weight * degree_matrix
-        edge_weight = edge_weight * sign_matrix
+        # edge_weight = edge_weight * sign_matrix
         zero_vec = -9e15*torch.ones_like(edge_weight)
         triple_confi = torch.where(padding_mask > 0, edge_weight, zero_vec) # item_num, ent_num
+        
         edge_confi = F.sigmoid(triple_confi * self.confi_tau)
 
         # Standard Normalization
