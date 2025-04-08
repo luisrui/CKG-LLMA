@@ -9,7 +9,7 @@ wandb : True
 LoadPretrain : 0
 KGPretrain : 0
 debug : 0
-isContrastive : 1 ## whether use contrastive learning
+isContrastive : 0 ## whether use contrastive learning
 isApplyLLMinfo : 1
 isConfiFilter : 1
 ContrastiveSeperate: 0
