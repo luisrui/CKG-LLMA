@@ -1,46 +1,60 @@
-from modules.data import *
-from modules.utils import *
-from modules.model import *
-from modules.procedure import *
+from modules.data import KGRecDataset, RecTrainDataset
+from modules.utils import read_yaml, print_yaml, set_random_seed
+from modules.model import CKG_LLMA
+from modules.explanation import build_reason_paths, generate_prompt, call_llm_api
 
-import torch
 import argparse
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, MultiStepLR
+import torch
+import json
+from tqdm import tqdm
 
 if __name__ == "__main__":
-    parse = argparse.ArgumentParser()
-    parse.add_argument("--config", type=str, default="config/argsML_model.yaml", help="the relative path of argments file")
-    args = parse.parse_args()
-    args = read_yaml(path=args.argpath)
-    args.update({
-        'num_users' : data_config[args["data"]["name"]]["num_users"],
-        'num_items' : data_config[args["data"]["name"]]["num_items"]
-    })
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default="config/argsML_model.yaml")
+    args = parser.parse_args()
+    args = read_yaml(path=args.config)
     print_yaml(args)
-    set_random_seed(seed=args["seed"])
-    
+
+    set_random_seed(args["seed"])
     device = "cuda:" + str(args["cuda"]) if int(args["cuda"]) >= 0 else "cpu"
-    #device = 'cpu'
-    kg_graph_data = KGRecDataset(args)
-    args.update({'device': device, 'ent2id' : kg_graph_data.ent2id,'rel2id' : kg_graph_data.rel2id,})
+    args["device"] = device
+
+    kg_data = KGRecDataset(args)
     rec_data = RecTrainDataset(args)
+    args.update({'ent2id': kg_data.ent2id, 'rel2id': kg_data.rel2id})
 
-    extractor = Extractor(args=args, srcKG=kg_graph_data, recData=rec_data)
-    Rec_data_loader = torch.utils.data.DataLoader(
-        rec_data,
-        batch_size=args["extract_batch_size"],
-        shuffle=True,
-        num_workers=args["dataloader_n_workers"],
-    )
+    model = CKG_LLMA(args=args, rec_data=rec_data, kg_data=kg_data)
+    if args["load_path"]:
+        model.load_checkpoint(args["load_path"], device)
+    model.eval()
 
-    Recmodel = CKG_LLMA(
-        args = args,
-        rec_data = rec_data,
-        kg_data = kg_train_data
-    )
-    if args["load_path"] and len(args["load_path"]) > 0:
-        Recmodel.load_checkpoint(args["load_path"], device)
+    eval_pairs = rec_data.sample_user_item_pairs(split="test", num_samples=20)
+    results = []
 
-    print("topks selected: ", args["topks"])
+    for (user, item) in tqdm(eval_pairs, desc="Generating Explanations"):
+        G_UI = kg_data.get_user_interactions(user)
+        G_II = kg_data.get_item_to_item_edges(user_items=G_UI, target_item=item)
+        G_IA = kg_data.get_attributes_for_paths(G_II)
 
-    Generate_subgraphs(1, args, Rec_data_loader, extractor, rec_data)
+        paths = build_reason_paths(user, item, G_UI, G_II, G_IA)
+        if not paths:
+            continue
+        confidence_scores = model.get_confidence_scores(paths)
+        prompt = generate_prompt(paths, confidence_scores, G_UI)
+
+        if args.get("use_api", False):
+            explanation = call_llm_api(prompt)
+        else:
+            explanation = "[MOCK] LLM would generate: " + prompt[:100]
+
+        results.append({
+            "user": user,
+            "item": item,
+            "explanation": explanation,
+            "paths": paths,
+            "confidence_scores": confidence_scores,
+            "prompt": prompt
+        })
+
+    with open("outputs/explanations_output.json", "w") as f:
+        json.dump(results, f, indent=2)
