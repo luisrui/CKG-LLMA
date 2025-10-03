@@ -75,18 +75,6 @@ def Read_prompt(
 
 def get_json_answer(system_query, user_query, model_name='gpt-3.5-turbo'):
     print('Asking...')
-    # completion = client.chat.completions.create(
-    #             model=model_name,
-    #             messages=[
-    #                 {"role": "system", "content": system_query},
-    #                 {"role": "user", "content": user_query},
-    #             ],
-    #             temperature=0.2,
-    #             top_p=0.1,
-    #         )
-    # text_response = completion.choices[0].message.content
-    # text_response = text_response.replace("\n", "").replace("  ", "")
-    # return text_response
     data = {
         "model": model_name,
         "messages": [

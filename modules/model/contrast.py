@@ -8,13 +8,6 @@ import math
 import scipy.sparse as sp
 import numpy as np
 import torch.nn.functional as F
-"""
-graph shape:
-[    0,     0,     0,  ..., 69714, 69715, 69715],
-[    0, 31668, 31669,  ..., 69714, 31666, 69715]
-
-values=tensor([0.0526, 0.0096, 0.0662,  ..., 0.5000, 0.1443, 0.5000])
-"""
 
 class Contrast(nn.Module):
     def __init__(self, args, model, rec_data):

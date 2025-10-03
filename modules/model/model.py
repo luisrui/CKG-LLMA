@@ -9,7 +9,7 @@ from ..utils import *
 from .KGEmb import *
 from .GAT import GAT
 
-## Knowledge-enhanced Large-language-model Contrastive Recommender
+## Our Model
 class CKG_LLMA(BasicModel):
     def __init__(self, args, rec_data, kg_data):
         super(CKG_LLMA, self).__init__()
@@ -54,8 +54,6 @@ class CKG_LLMA(BasicModel):
             num_embeddings=self.num_relations+1, embedding_dim=self.latent_dim)
 
         if self.args['LoadPretrain'] == 0:
-            # nn.init.normal_(self.embedding_user.weight, std=0.1)
-            # nn.init.normal_(self.embedding_item.weight, std=0.1)
             nn.init.normal_(self.embedding_entity.weight, std=0.1)
             nn.init.normal_(self.embedding_relation.weight, std=0.1)
         else:
@@ -311,34 +309,6 @@ class CKG_LLMA(BasicModel):
     
     @torch.no_grad()
     def get_reverse_kg(self, item_entities):
-        # padding = self.num_entities
-        # entity_indices = item_entities.view(-1)
-        # item_indices = self.item_ids.repeat_interleave(self.entity_num_per_item)
-        
-        # valid_mask = (entity_indices != padding)
-        # entity_indices = entity_indices[valid_mask] - self.num_users - self.num_items
-        # item_indices = item_indices[valid_mask]
-        # attr_items = torch.full((self.num_attrs, self.item_num_per_entity), padding, dtype=torch.long, device=self.device)
-        # counts = torch.zeros(self.num_attrs, dtype=torch.long, device=self.device)
-
-        # for i in range(self.item_num_per_entity):
-        #     mask = (counts < self.item_num_per_entity) & (entity_indices < self.num_attrs)
-        #     counts = counts + mask.long()
-        #     scatter_indices = (entity_indices + mask.long() * self.num_attrs).clamp(0, self.num_attrs - 1)
-        #     attr_items.scatter_(1, counts.view(-1, 1).expand(-1, scatter_indices.shape[0]), item_indices)
-        # attr_items = [[] for _ in range(self.num_attrs)] # N_ent, e_num
-        # for ent_idx, itm_idx in zip(entity_indices.cpu(), item_indices.cpu()):
-        #     ent_idx = ent_idx - self.num_users - self.num_items
-        #     attr_items[ent_idx].append(itm_idx)
-        # for i in range(self.num_attrs):
-        #     if len(attr_items[i]) > self.item_num_per_entity:
-        #         attr_items[i] = attr_items[i][:self.item_num_per_entity]
-        #     attr_items[i] = torch.tensor(attr_items[i], dtype=torch.long, device=self.device)
-        #     if len(attr_items[i]) < self.item_num_per_entity:
-        #         attr_items[i] = F.pad(attr_items[i], (0, self.item_num_per_entity - attr_items[i].shape[0]), 'constant', padding)
-        # attr_items = torch.stack(attr_items)    
-        # attr_items = attr_items.masked_fill(attr_items == padding, padding)   
-        # return attr_items
         return 0
 
     def renew_entity_embs(self, item_entities, We):
