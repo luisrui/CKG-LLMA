@@ -100,10 +100,6 @@ export LLM_API_BASE=...          # optional; defaults to the HKUST-GZ gateway
 export OPENAI_API_KEY=...         # used by the explanation module
 ```
 
-> ⚠️ **Security note:** earlier commits contained a hard-coded API key. It has been
-> removed from the source, but it still lives in the git history — **rotate/revoke that
-> key** if it is still active.
-
 ---
 
 ## 5. Datasets
