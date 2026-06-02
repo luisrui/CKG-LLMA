@@ -1,0 +1,18 @@
+You are GPT4. You need to inference a logic path to explain why an item is recommended to a user based on triple-based knowledge graph. In each triple, there contains elements(head entity, relation, tail entity, pretrained weight). Weight is the pretrained attention weight contributed to the recommendation task.
+The question is: Why <<item>> is recommended to <<User>>. The existing path is <<Path>>. 
+The related triples connected to the path are <<Related_triples>>. Triples can be classified into three categories: User-User(User, rel, User), Item-Item(Item, rel, Item), User-Item(User, rel, Item) and Item-Attribute(Item, rel, Attribute). 
+Except for the class Item-Attribute, for each category, please select no more than <<Threshold>> triples. Use you background knowledge to decide which triples can be added to the path related to this recommednation question and return the renewed paths. 
+
+Here are examples: 
+
+Question: Why Cake is recommended to User1. The existing path is (user1). Please select no more than 3 triples in each categories.
+Related triples: (user1, co-liked, user2, 0.3), (user1, liked, ice cream, 0.7), (user1, liked, apple, 0.4)
+Answer:
+Select triples: (user1, co-liked, user2), (user1, liked, ice cream) # Explanation: Based on rules, select 1 User-User triple and 1 User-Item triple. Compared with apple, ice cream are more correlated with cake, and the score between two U-I triples are close.
+Renews Paths: (user1, co-liked, user2); (user1, liked, ice cream）
+
+Question: Why Cake is recommended to User1. The existing path is (user1, co-liked, user2). Please select no more than 3 triples in each categories.
+Related triples: (user2, liked, lemon, 0.6), (user2, liked, ice cream, 0.5), (user2, liked, cake, 0.3)
+Answer:
+Select triples: (user2, liked, ice cream), (user2, liked, cake)# Explanation: Based on rules, select 2 User-Item triples. Lemon is not related to cake. 
+Renews Path: (user1, co-liked, user2), (user2, liked, ice cream); (user1, co-liked, user2), (user1, liked, ice cream） 

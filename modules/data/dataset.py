@@ -1,0 +1,639 @@
+import pandas as pd
+import numpy as np
+import scipy.sparse as sp
+import torch 
+import torch_geometric
+from torch_geometric.data import Data
+import random
+import pickle
+import os
+import json
+from torch.utils.data import DataLoader
+
+from collections import defaultdict
+from tqdm import tqdm
+from ..utils import sp_mat_to_sp_tensor
+from ..model import Sampler
+from .data_config import data_config
+try:     
+    from cppimport import imp_from_filepath
+    from os.path import join, dirname
+    path = join(dirname(__file__), "SampleFunction.cpp")
+    SampleFunction = imp_from_filepath(filepath=path)
+    sample_ext = True
+except Exception as e:
+    print("Error message:", str(e))
+    print("Cpp extension not loaded")
+    sample_ext = False
+
+class KGDataset(torch.utils.data.Dataset):
+    def __init__(self, args):
+        print('Loading Knowledge Graph Triples...')
+        self.name = args['data']['name']
+        self._data_dir = f'./dataset/{args["data"]["name"]}/'
+
+        triples = pd.read_csv(os.path.join(self._data_dir, 'kg_retained.txt'), sep=' ', names=['h', 'r', 't'], engine='python') 
+        self.kg_data = triples
+        self.size = len(triples)
+        #self.kg_data = triples.drop_duplicates()
+        self.num_users = args['num_users']
+        self.num_items = args['num_items']
+        self.num_entity = len(args['ent2id'])
+        self.num_relation = len(args['rel2id'])
+        
+        self.kg_dict, self.heads = self.generate_kg_data(self.kg_data)
+        self.entity_num = args['entity_num_per_item']
+
+    def generate_kg_data(self, kg_data):# -> tuple[defaultdict[Any, list], list]: 
+        # construct kg dict
+        kg_dict = defaultdict(list)
+        for row in kg_data.iterrows():
+            h, r, t = row[1]
+            kg_dict[h].append((r, t))
+        heads = list(kg_dict.keys())
+        return kg_dict, heads
+
+    def get_kg_dict(self):
+        i2es = dict()
+        i2rs = dict()
+        for item in range(self.num_users, self.num_users + self.num_items):
+            rts = self.kg_dict.get(item, False)
+            if rts:
+                tails = list(map(lambda x:x[1], rts))
+                relations = list(map(lambda x:x[0], rts))
+                if(len(tails) > self.entity_num):
+                    # i2es[item] = torch.IntTensor(tails).to(device)[:self.entity_num]
+                    # i2rs[item] = torch.IntTensor(relations).to(device)[:self.entity_num]
+                    i2es[item] = np.array(tails[:self.entity_num])
+                    i2rs[item] = np.array(relations[:self.entity_num])
+                else:
+                    # last embedding pos as padding idx
+                    tails.extend([self.num_entity]*(self.entity_num-len(tails)))
+                    relations.extend([self.num_relation]*(self.entity_num-len(relations)))
+                    # i2es[item] = torch.IntTensor(tails).to(device)
+                    # i2rs[item] = torch.IntTensor(relations).to(device)
+                    i2es[item] = np.array(tails)
+                    i2rs[item] = np.array(relations)
+            # else:
+            #     i2es[item] = torch.IntTensor([self.num_entity]*self.entity_num).to(device)
+            #     i2rs[item] = torch.IntTensor([self.num_relation]*self.entity_num).to(device)
+        return i2es, i2rs
+
+    def __len__(self):
+        return len(self.kg_dict)
+
+    def __getitem__(self, index):
+        head = self.heads[index]
+        relation, pos_tail = random.choice(self.kg_dict[head])
+        while True:
+            neg_head = random.choice(self.heads)
+            neg_tail = random.choice(self.kg_dict[neg_head])[1]
+            if (relation, neg_tail) in self.kg_dict[head]:
+                continue
+            else:
+                break
+        return head, relation, pos_tail, neg_tail
+    
+class KGRecDataset(torch_geometric.data.Dataset):
+    '''
+    The dataset constructs graph nodes for background knowledge search and subgraph sampler. 'self.u_of_i' is for training, and 'self.u_of_i_all' is for all training, valid, and test. It servers for sampling.
+    '''
+    def __init__(self, args, transform = None, pre_transform = None):
+        
+        print('Loading background knowledge graph data...')
+        self.name = args['data']['name']
+        self._data_dir = f'./dataset/{args["data"]["name"]}/'
+
+        #self.triples = pd.read_csv(os.path.join(self._data_dir, 'triples.csv')) # Load the triples in three rows('head', 'relation', 'tail')
+        self.ent2id = json.load(open(os.path.join(self._data_dir, 'entity2id.json')))
+        self.rel2id = json.load(open(os.path.join(self._data_dir, 'relation2id.json')))
+        self.num_user = data_config[self.name]['num_users']
+        self.num_items = data_config[self.name]['num_items']
+
+        #self.i_of_u = defaultdict(list) ## item-user with Liked relation
+        self.u_of_i_all = defaultdict(list) ## user-item with Liked relation
+
+        self.i_of_a = defaultdict(list) ## item-attribute with Has attr relations
+        self.i_of_i = defaultdict(list) ## item-item with Co-attr relations
+        self.t_of_hr = defaultdict(list) ## tail_2_head_relation triples
+
+        super(KGRecDataset, self).__init__(self._data_dir, transform, pre_transform)
+
+        self.struc_dataset = self.get(0)
+
+        if os.path.exists(f'./dataset/{self.name}/pre_saved/i_of_a.pt'):
+            self._load_adj()
+            # Build self.i_of_i
+            edge_index = self.struc_dataset.edge_index
+            edge_type = self.struc_dataset.edge_type
+            print('Building item-item relations...')
+            item_mask = (edge_index[0] >= self.num_user) & (edge_index[0] < self.num_user + self.num_items) & \
+                (edge_index[1] >= self.num_user) & (edge_index[1] < self.num_user + self.num_items)
+            #item_item = torch.full((self.num_items, self.num_items), -1, dtype=torch.int64)
+            item_hs, item_ts, ii_rels = edge_index[0][item_mask].numpy(), edge_index[1][item_mask].numpy(), edge_type[item_mask].numpy()
+            for i in tqdm(range(len(item_hs))):
+                h, t, r = item_hs[i], item_ts[i], ii_rels[i]
+                self.i_of_i[h].append((r, t))
+                self.i_of_i[t].append((r, h))
+        else:
+            raise ValueError('No pre-saved u-i relations found. Please run the pre-processing script first.')
+
+
+    def __len__(self):
+        return len(self.trainset)
+    
+    def _load_adj(self):
+        self.u_of_i_all = torch.load(f'./dataset/{self.name}/pre_saved/u_of_i_all.pt')
+        #self.i_of_i = torch.load(f'./dataset/{self.name}/pre_saved/i_of_i.pt')
+        self.i_of_a = torch.load(f'./dataset/{self.name}/pre_saved/i_of_a.pt')
+        self.t_of_hr = torch.load(f'./dataset/{self.name}/pre_saved/t_of_hr.pt')
+        #self.i_of_u = torch.load(f'./dataset/{self.name}/pre_saved/i_of_u.pt')
+
+    @property
+    def raw_file_names(self):
+        return ['triples.csv', 'entity2id.json']
+    
+    @property
+    def processed_file_names(self):
+        return [f'{self.name}.pt']
+
+    @property
+    def num_nodes(self):
+        return self.get(0).num_nodes
+
+    @property
+    def get_struc_dataset(self):
+        return self.struc_dataset
+    
+    def download(self):
+        pass
+    
+    def process(self):
+        '''
+        Process the raw data into graph data with adjacency matrix and related egde information.
+        '''
+        triples = pd.read_csv(os.path.join(self._data_dir, 'triples.csv')) # Load the triples in three rows('head', 'relation', 'tail')
+        ent2id = json.load(open(os.path.join(self._data_dir, 'entity2id.json')))
+
+        edge_index = torch.tensor([[h, t] for h, t in zip(triples['head'], triples['tail'])], dtype=torch.long).t().contiguous()
+        edge_type = torch.tensor([r for r in triples['relation']], dtype=torch.long)
+
+        data = Data(edge_index = edge_index, edge_type = edge_type, num_nodes = len(ent2id))
+        torch.save((data, None), self.processed_paths[0])
+
+        ## Build self.u_of_i and self.i_of_u
+        print('Building user-item and item-user relations...')
+        user_item = torch.zeros((self.num_user, self.num_items), dtype=torch.bool)
+        item_user = torch.zeros((self.num_items, self.num_user), dtype=torch.bool)
+        liked_mask = (edge_type == self.rel2id['liked']) & (edge_index[0] < self.num_user) & \
+            (self.num_user <= edge_index[1]) & (edge_index[1] < self.num_user + self.num_items)
+        user_item[edge_index[0][liked_mask], edge_index[1][liked_mask] - self.num_user] = True
+        self.u_of_i_all = {u: (np.flatnonzero(row) + self.num_user).tolist() for u, row in enumerate(user_item.numpy())}
+        # item_user[edge_index[1][liked_mask] - self.num_user, edge_index[0][liked_mask]] = True
+        # self.i_of_u = {i + self.num_user: np.flatnonzero(row).tolist() for i, row in enumerate(item_user.numpy())}
+
+        ## Build self.u_of_u
+        # print('Building user-user relations...')
+        # user_user = torch.zeros((self.num_user, self.num_user), dtype=torch.bool)
+        # coliked_mask = (edge_type == self.rel2id['co-liked']) & (edge_index[0] < self.num_user) & (edge_index[1] < self.num_user)
+        # user_user[edge_index[0][coliked_mask], edge_index[1][coliked_mask]] = True
+        # self.u_of_u = {u: np.flatnonzero(row).tolist() for u, row in enumerate(user_user.numpy())}
+        
+        # Build self.i_of_i
+        # print('Building item-item relations...')
+        # item_mask = (edge_index[0] >= self.num_user) & (edge_index[0] < self.num_user + self.num_items) & \
+        #     (edge_index[1] >= self.num_user) & (edge_index[1] < self.num_user + self.num_items)
+        # #item_item = torch.full((self.num_items, self.num_items), -1, dtype=torch.int64)
+        # item_hs, item_ts, ii_rels = edge_index[0][item_mask].numpy(), edge_index[1][item_mask].numpy(), edge_type[item_mask].numpy()
+        # for i in tqdm(range(len(item_hs))):
+        #     h, t, r = item_hs[i], item_ts[i], ii_rels[i]
+        #     self.i_of_i[h].append((r, t))
+        #     self.i_of_i[t].append((r, h))
+        #self.i_of_i = {i : [(h, r, t) for h, r, t in zip(edge_index[0][item_mask], edge_type[item_mask], edge_index[1][item_mask]) if i == h or i == t] for i in range(self.num_user, self.num_user+self.num_items)}
+        
+        ## Build self.i_of_a
+        print('Building item-attribute relations...')
+        attr_mask = (edge_index[0] >= self.num_user) & (edge_index[0] < self.num_user+self.num_items) & (edge_index[1] >= self.num_user+self.num_items)
+        target_items, target_attrs, target_rels = edge_index[0][attr_mask].numpy(), edge_index[1][attr_mask].numpy(), edge_type[attr_mask].numpy()
+        for i in tqdm(range(len(target_items))):
+            h, t, r = target_items[i], target_attrs[i], target_rels[i]
+            self.i_of_a[h].append((r, t))
+        # self.i_of_a = {i: [(i, r, t) for i, r, t in zip(edge_index[0][attr_mask], edge_type[attr_mask], edge_index[1][attr_mask]) if i == i] for i in range(self.num_user, self.num_user+self.num_items)}
+        
+        ## build self.t_of_hr
+        print('Building tail_2_head_relation triples...')
+        for (h, t), r in zip(edge_index.t().tolist(), edge_type.tolist()):
+            self.t_of_hr[(h, r)].append(t)
+
+        os.makedirs(f'./dataset/{self.name}/pre_saved/', exist_ok=True)
+        print('saving pre-saved relations...')
+        # torch.save(self.u_of_u, f'./dataset/{self.name}/pre_saved/u_of_u.pt')
+        torch.save(self.i_of_i, f'./dataset/{self.name}/pre_saved/i_of_i.pt') 
+        torch.save(self.u_of_i_all, f'./dataset/{self.name}/pre_saved/u_of_i_all.pt')
+        #torch.save(self.i_of_u, f'./dataset/{self.name}/pre_saved/i_of_u.pt')
+        torch.save(self.i_of_a, f'./dataset/{self.name}/pre_saved/i_of_a.pt')
+        torch.save(self.t_of_hr, f'./dataset/{self.name}/pre_saved/t_of_hr.pt')
+    
+    def len(self):
+        return len(self.processed_file_names)
+
+    def get(self, idx):
+        data = torch.load(os.path.join(self.processed_dir, self.processed_file_names[idx]))[0]
+        return data
+
+class RecTrainDataset(torch.utils.data.Dataset):
+    '''
+    The class for recommendation dataset, containing user-item interactions, reviews and positive ratings
+    '''
+    def __init__(self, args):
+        print('Loading recommendation dataset...')
+        self.name = args['data']['name']
+        self.seed = args['seed']
+
+        self._data_dir = f'./dataset/{self.name}/'
+        self.trainset = pd.read_csv(os.path.join(self._data_dir, 'train.csv'))
+        self.validset = pd.read_csv(os.path.join(self._data_dir, 'valid.csv'))
+        self.testset = pd.read_csv(os.path.join(self._data_dir, 'test.csv'))
+
+        self.ent2id = json.load(open(os.path.join(self._data_dir, 'entity2id.json')))
+        self.rel2id = json.load(open(os.path.join(self._data_dir, 'relation2id.json')))
+
+        self.u_of_i = defaultdict(list)
+        if os.path.exists(f'./dataset/{self.name}/pre_saved/u_of_i.pt'):
+            self.u_of_i = torch.load(f'./dataset/{self.name}/pre_saved/u_of_i.pt')
+        else:
+            self.u_of_i = self._create_u_of_i()
+
+        self.wrapped_valid_set = self.__build_test_rp(self.validset)
+        self.wrapped_test_set = self.__build_test_rp(self.testset)
+        
+        self._sampler = PairwiseSampler(self.name, self.ent2id, self.rel2id)
+        self.norm_adj = sp_mat_to_sp_tensor(self._create_adj())
+
+    @property
+    def num_users(self):
+        return data_config[self.name]['num_users']
+    
+    @property
+    def num_items(self):
+        return data_config[self.name]['num_items']
+    
+    @property
+    def get_norm_adj(self):
+        return self.norm_adj
+    
+    @property
+    def item_np(self):
+        return np.array([
+            self.ent2id[self.trainset.iloc[idx][data_config[self.name]['item']]] for idx in range(len(self.trainset))
+        ])
+
+    @property
+    def user_np(self):
+        return np.array([
+            self.ent2id[self.trainset.iloc[idx][data_config[self.name]['user']]] for idx in range(len(self.trainset))
+        ])
+
+    def __len__(self):
+        return len(self.trainset)
+    
+    def __getitem__(self, idx):
+        user_id = self.ent2id[self.trainset.iloc[idx][data_config[self.name]['user']]]
+        item_id = self.ent2id[self.trainset.iloc[idx][data_config[self.name]['item']]]
+        #user_id_negsampled, item_id_negsampled = self._sampler.neg_sample_fn(user_id, item_id)
+        #review = self.trainset.iloc[idx][data_config[self.name]['review']]
+        #return user_id_negsampled, item_id_negsampled, review
+        #neg_id = self.negative_sample(torch.Tensor([user_id]).long(), torch.Tensor([item_id]).long())
+        while True:
+            neg_id = np.random.randint(self.num_users, self.num_users + self.num_items)
+            if neg_id in self.u_of_i[user_id]:
+                continue
+            else:
+                break
+        return user_id, item_id, neg_id
+
+    def negative_sample(self, users:torch.Tensor, items:torch.Tensor):
+        S = self._sampler.UniformSample_original(self.seed, users, items)
+        # posUsers = torch.Tensor(S[:, 0]).long()
+        # posItems = torch.Tensor(S[:, 1]).long()
+        negItems = torch.Tensor(S[:, 2]).long()
+        return negItems
+    
+    def _create_u_of_i(self):
+        for user, item in zip(self.trainset[data_config[self.name]['user']], self.trainset[data_config[self.name]['item']]):
+            user_id = self.ent2id[user]
+            item_id = self.ent2id[item]
+            self.u_of_i[user_id].append(item_id)
+
+        torch.save(self.u_of_i, f'./dataset/{self.name}/pre_saved/u_of_i.pt')
+
+    def _create_adj(self):
+        nodes_num = self.num_users + self.num_items
+        users_np = self.user_np
+        items_np = self.item_np
+        ratings = np.ones_like(users_np, dtype=np.float32)
+        tmp_adj = sp.csr_matrix((ratings, (users_np, items_np)), shape=(nodes_num, nodes_num))
+        adj_mat = tmp_adj + tmp_adj.T
+
+        # normalize adjcency matrix
+        rowsum = np.array(adj_mat.sum(1))
+        d_inv = np.power(rowsum, -0.5).flatten()
+        d_inv[np.isinf(d_inv)] = 0.
+        d_mat_inv = sp.diags(d_inv)
+        norm_adj_tmp = d_mat_inv.dot(adj_mat)
+        adj_matrix = norm_adj_tmp.dot(d_mat_inv)
+
+        return adj_matrix
+    
+    def __build_test_rp(self, dataset):
+        """
+        Build the test or valid data for ranking prediction.
+        """
+        test_data = defaultdict(list)
+
+        for i in range(len(dataset)):
+            user = self.ent2id[dataset.iloc[i][data_config[self.name]['user']]]
+            item = self.ent2id[dataset.iloc[i][data_config[self.name]['item']]]
+            test_data[user].append(item)
+        
+        return test_data
+
+    def get_wrapped_set(self, mode):
+        if mode == 'valid':
+            return self.wrapped_valid_set
+        elif mode == 'test':
+            return self.wrapped_test_set
+        else:
+            raise ValueError('Invalid mode. Please choose from "valid" or "test".')
+    
+    def get_pos(self, users):
+        posItems = [self.u_of_i[user] for user in users]
+        return posItems
+    
+    def get_test_pos(self, users, mode):
+        if mode == 'valid':
+            posItems = [self.wrapped_valid_set[user] for user in users]
+        elif mode == 'test':
+            posItems = [self.wrapped_test_set[user] for user in users]
+        return posItems
+
+    def get_UIinteraction(self):
+        edge_index = np.array([[u, i] for u in self.u_of_i.keys() for i in self.u_of_i[u]])
+        edge_index = np.transpose(edge_index)
+        edge_index = torch.tensor(edge_index, dtype=torch.long)
+        edge_type = torch.tensor([self.rel2id['liked']] * len(edge_index[0]), dtype=torch.long)
+        return edge_index, edge_type
+
+class LLMPoolDataset(torch.utils.data.Dataset):
+    '''
+    '''
+    def __init__(self, args, graph_size):
+        print('Loading LLM Enhanced Information...')
+        self._LLM_info_dir = os.path.join(args['data']['path'], args['data']['name'], args['data']['LLM_info'])
+        self.ii_del = pd.read_csv(os.path.join(self._LLM_info_dir, 'ii_del.csv'))
+        self.ii_add = pd.read_csv(os.path.join(self._LLM_info_dir, 'ii_add.csv'))
+        self.ui_del = pd.read_csv(os.path.join(self._LLM_info_dir, 'ui_del.csv'))
+        self.ui_add = pd.read_csv(os.path.join(self._LLM_info_dir, 'ui_add.csv'))
+        self.graph_size = graph_size
+
+    def __len__(self):
+        return min(len(self.ii_del), len(self.ii_add), len(self.ui_del), len(self.ui_add))
+    
+    def __getitem__(self, idx):
+        return self.ii_del.iloc[idx], self.ii_del.iloc[idx], self.ii_del.iloc[idx], self.ii_del.iloc[idx]
+    
+    def generate_batch(self, delete_ratio, add_ratio):
+        ui_add_size = min(int(self.graph_size * add_ratio),len(self.ui_add))
+        ui_delete_size = min(int(self.graph_size * delete_ratio), len(self.ui_del))
+        ii_add_size = min(int(self.graph_size * add_ratio),len(self.ii_add))
+        ii_delete_size = min(int(self.graph_size * delete_ratio), len(self.ii_del))
+
+        random_idx = np.random.choice(len(self.ii_add), ii_add_size, replace=False)
+        ii_add = [tuple(self.ii_add.iloc[idx]) for idx in random_idx]
+        random_idx = np.random.choice(len(self.ii_del), ii_delete_size, replace=False)
+        ii_del = [tuple(self.ii_del.iloc[idx]) for idx in random_idx]
+        
+        random_idx = np.random.choice(len(self.ui_add), ui_add_size, replace=False)
+        ui_add = [tuple(self.ui_add.iloc[idx]) for idx in random_idx]
+        random_idx = np.random.choice(len(self.ui_del), ui_delete_size, replace=False)
+        ui_del = [tuple(self.ui_del.iloc[idx]) for idx in random_idx]
+        del_cands = [item[2] for item in ui_del if item[1] == 0]
+        #print(del_cands)
+        return {
+            'ii_add': ii_add,
+            'ii_del': ii_del,
+            'ui_add': ui_add,
+            'ui_del': ui_del,
+            'del_cands' : list(set(del_cands))
+        }
+  
+class LLMRectifyDataset(torch.utils.data.Dataset):
+    '''
+    '''
+    def __init__(self, args):
+        print('Loading LLM Enhanced Information...')
+        self._LLM_info_dir = args['LLM_info_path']
+        self.ii_del = pd.read_csv(os.path.join(self._LLM_info_dir, 'ii_del.csv'))
+        self.ii_add = pd.read_csv(os.path.join(self._LLM_info_dir, 'ii_add.csv'))
+        self.ui_del = pd.read_csv(os.path.join(self._LLM_info_dir, 'ui_del.csv'))
+        self.ui_add = pd.read_csv(os.path.join(self._LLM_info_dir, 'ui_add.csv'))
+        self.LLM_info = {
+            'ii': {
+                'add': self.ii_add,
+                'delete': self.ii_del
+            },
+            'ui': {
+                'add': self.ui_add,
+                'delete': self.ui_del
+            }
+        }
+
+    def __len__(self):
+        return len(self.LLM_info['ii']['add'])
+    
+    def __getitem__(self, idx):
+        edit_ii = self.LLM_info['ii'][idx]
+        ii_add = edit_ii['add']
+        ii_del = edit_ii['delete']
+        edit_ui = self.LLM_info['ui'][idx]
+        ui_add = edit_ui['add']
+        ui_del = edit_ui['delete']
+        return ii_add, ii_del, ui_add, ui_del
+    
+    def generate_batch(self, idxs):
+        ii_add = [tuple(item) for idx in idxs for item in self.LLM_info['ii'][idx]['add']]
+        ii_del = [tuple(item) for idx in idxs for item in self.LLM_info['ii'][idx]['delete']]
+        ui_add = [tuple(item) for idx in idxs for item in self.LLM_info['ui'][idx]['add']]
+        ui_del = [tuple(item) for idx in idxs for item in self.LLM_info['ui'][idx]['delete']]
+        ii_add = list(set(ii_add))
+        ii_del = list(set(ii_del))
+        ui_add = list(set(ui_add))
+        ui_del = list(set(ui_del))
+        return {
+            'ii_add': ii_add,
+            'ii_del': ii_del,
+            'ui_add': ui_add,
+            'ui_del': ui_del,
+        }
+    
+class PairwiseSampler(Sampler):
+    '''
+    Pairwise sampler to sample un-correlated items for each user. 
+    '''
+    def __init__(self, 
+                 name : str,
+                 ent2id:dict, 
+                 rel2id:dict, 
+                 num_neg:int = 1
+                 ):
+        
+        super(PairwiseSampler, self).__init__()
+        if num_neg <= 0:
+            raise ValueError("'num_neg' must be a positive integer.")
+
+        self.name = name
+        self.e2id = ent2id
+        self.r2id = rel2id
+        self.num_user = data_config[self.name]['num_users']
+        self.num_item = data_config[self.name]['num_items']
+        self.num_neg = num_neg
+
+        self.u_of_i_all = defaultdict(list)
+        #self.i_of_u = defaultdict(list)
+        self._load_uoi()
+    
+    def _load_uoi(self):
+        self.u_of_i_all = torch.load(f'./dataset/{self.name}/pre_saved/u_of_i_all.pt')
+
+    def UniformSample_original(self, seed, users, items):
+        if sample_ext:
+            SampleFunction.seed(seed)
+            # users = np.asarray(users, dtype=np.int32)
+            # items = np.asarray(items, dtype=np.int32)
+            S = SampleFunction.sample_negative(users, items, self.u_of_i_all, self.num_user, self.num_item)
+        else:
+            S = self._uniformSample_original_python(users, items)
+        return S
+
+    def _uniformSample_original_python(self, users, items):
+        """
+        the original impliment of BPR Sampling in LightGCN
+        :return:
+            np.array
+        """
+        S = []
+        for idx, (user, positem) in enumerate(zip(users, items)):
+            user = user.item()
+            posForUser = self.u_of_i_all[user]
+            while True:
+                negitem = np.random.randint(self.num_user, self.num_user + self.num_item)
+                if negitem in posForUser:
+                    continue
+                else:
+                    break
+            S.append([user, positem, negitem])
+
+        return np.array(object=S)
+    
+class NegativeSampler(Sampler):
+    '''
+    Negative sampler to sample negative tails for each fact triples in KGRecdataset.
+    '''
+    def __init__(self, 
+                 name:str,
+                 kg : Data,
+                 ent2id:dict, 
+                 rel2id:dict, 
+                 neg_size:int):
+        super(NegativeSampler).__init__()
+        self.name = name
+        self.kg = kg
+        self.e2id = ent2id
+        self.r2id = rel2id
+        self.neg_size = neg_size
+
+        self.t_of_hr = defaultdict(list)
+        self._load_hr()
+
+    def _load_hr(self):
+        self.t_of_hr = torch.load(f'./dataset/{self.name}/pre_saved/t_of_hr.pt')
+ 
+    def Triples_neg_sample(self, edge_index, edge_type):
+        batch_h, batch_t, batch_r = edge_index[0], edge_index[1], edge_type
+		#len_triples = batch_h.__len__()
+        batch_h_sample = np.repeat(batch_h.view(-1, 1).cpu().numpy(), 1 + self.neg_size, axis = -1)
+        batch_t_sample = np.repeat(batch_t.view(-1, 1).cpu().numpy(), 1 + self.neg_size, axis = -1)
+        batch_r_sample = np.repeat(batch_r.view(-1, 1).cpu().numpy(), 1 + self.neg_size, axis = -1)
+        for idx, (h, t, r) in enumerate(zip(batch_h, batch_t, batch_r)):
+            last = 1
+            if self.neg_size > 0:
+                neg_tail = self.__triples_normal_batch(h, t, r, self.neg_size)
+                if len(neg_tail) > 0:
+                    batch_t_sample[idx][last:last + len(neg_tail)] = neg_tail
+                    last += len(neg_tail)
+        batch_h = batch_h_sample.transpose()
+        batch_t = batch_t_sample.transpose()
+        batch_r = batch_r_sample.transpose()
+
+        expand_edge_index = torch.tensor(np.array([batch_h.squeeze().flatten(), batch_t.squeeze().flatten()]), dtype=torch.int32)
+        expand_edge_type = torch.tensor(batch_r.squeeze().flatten(), dtype=torch.int32)
+        return expand_edge_index, expand_edge_type
+    
+    def __triples_normal_batch(self, h, t, r, neg_size):
+        neg_list_t = []
+        neg_cur_size = 0
+        while neg_cur_size < neg_size:
+            neg_tmp_t = self.__triples_corrupt_tail(h, r, num_max = (neg_size - neg_cur_size) * 2)
+            neg_list_t.append(neg_tmp_t)
+            neg_cur_size += len(neg_tmp_t)
+        if neg_list_t != []:
+            neg_list_t = np.concatenate(neg_list_t)
+
+        return neg_list_t[:neg_size]
+    
+    def __triples_corrupt_tail(self, h, r, num_max = 1):
+        tmp = torch.tensor(random.sample(range(len(self.e2id)), k=num_max))
+        h_index, r_index= h.item(), r.item()
+        mask = np.in1d(tmp, self.t_of_hr[(h_index, r_index)], assume_unique=True, invert=True)
+        neg = tmp[mask]
+        return neg
+    
+class ReshufflingLoader:
+    def __init__(self, data_length, batch_size, shuffle=True, num_workers=0, drop_last=False):
+        self.data_length = data_length
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.num_workers = num_workers
+        self.drop_last = drop_last
+        self.dataloader = self._create_dataloader()
+        self.dataloader_iter = iter(self.dataloader)
+
+    def _create_dataloader(self):
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __init__(self, length):
+                self.length = length
+
+            def __len__(self):
+                return self.length
+
+            def __getitem__(self, idx):
+                return idx
+
+        dataset = SimpleDataset(self.data_length)
+        return DataLoader(dataset, batch_size=self.batch_size, shuffle=self.shuffle,
+                          num_workers=self.num_workers, drop_last=self.drop_last)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            batch = next(self.dataloader_iter)
+        except StopIteration:
+            self.dataloader = self._create_dataloader()
+            self.dataloader_iter = iter(self.dataloader)
+            batch = next(self.dataloader_iter)
+        return batch
+
+    def __len__(self):
+        return len(self.dataloader)
